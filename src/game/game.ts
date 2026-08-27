@@ -6,7 +6,16 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import type { NetworkPlayer } from '../../shared/protocol';
 import { BattleAudio } from './audio';
 import { KnightRig, createRemoteKnight, type RigAction } from './models';
-import { angleDelta, clamp, damp, distanceXZ, pointInAttackArc, seededRandom, smoothstep } from './math';
+import {
+  angleDelta,
+  clamp,
+  damp,
+  distanceXZ,
+  pointInAttackArc,
+  seededRandom,
+  setRightPerpendicular,
+  smoothstep,
+} from './math';
 
 export interface HudState {
   health: number;
@@ -624,7 +633,7 @@ export class SiegeGame {
     if (sprint > 1 && input.lengthSq() > 0.01) this.player.stamina = Math.max(0, this.player.stamina - delta * 12);
     const moveSpeed = this.player.speed * sprint * (this.player.action === 'block' ? 0.38 : 1);
     const forward = this.temp.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-    const right = this.temp2.set(forward.z, 0, -forward.x);
+    const right = setRightPerpendicular(this.temp2, forward);
     const move = new THREE.Vector3().addScaledVector(forward, input.y).addScaledVector(right, input.x);
     if (move.lengthSq() > 0.01) {
       move.normalize();

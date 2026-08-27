@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { angleDelta, clamp, pointInAttackArc, seededRandom, smoothstep } from './math';
+import { angleDelta, clamp, pointInAttackArc, seededRandom, setRightPerpendicular, smoothstep } from './math';
 
 describe('game math', () => {
   it('clamps and smooths normalized values', () => {
@@ -21,5 +21,23 @@ describe('game math', () => {
     const a = seededRandom(42);
     const b = seededRandom(42);
     expect([a(), a(), a()]).toEqual([b(), b(), b()]);
+  });
+
+  it('maps D to the player right and A to the player left', () => {
+    const target = {
+      x: 0,
+      y: 0,
+      z: 0,
+      set(x: number, y: number, z: number) {
+        this.x = x;
+        this.y = y;
+        this.z = z;
+        return this;
+      },
+    };
+
+    const right = setRightPerpendicular(target, { x: 0, z: -1 });
+    expect({ x: right.x, z: right.z }).toEqual({ x: 1, z: 0 });
+    expect({ x: -right.x, z: -right.z }).toEqual({ x: -1, z: -0 });
   });
 });

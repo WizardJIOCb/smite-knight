@@ -19,6 +19,13 @@ export function distanceXZ(a: { x: number; z: number }, b: { x: number; z: numbe
   return Math.hypot(a.x - b.x, a.z - b.z);
 }
 
+export function setRightPerpendicular<T extends { set: (x: number, y: number, z: number) => T }>(
+  target: T,
+  forward: { x: number; z: number },
+): T {
+  return target.set(-forward.z, 0, forward.x);
+}
+
 export function angleDelta(from: number, to: number): number {
   return Math.atan2(Math.sin(to - from), Math.cos(to - from));
 }

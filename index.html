@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#090a0c" />
+    <meta name="description" content="SMITE KNIGHT — масштабный штурм крепости прямо в браузере." />
+    <meta property="og:title" content="SMITE KNIGHT — Ashen Siege" />
+    <meta property="og:description" content="Прорви ворота, переживи град стрел и возьми Чёрную крепость." />
+    <title>SMITE KNIGHT — Ashen Siege</title>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game" aria-label="Игровое поле SMITE KNIGHT"></canvas>
+
+      <div id="cinematic-bars" aria-hidden="true"><i></i><i></i></div>
+
+      <section id="landing" class="screen active" aria-labelledby="game-title">
+        <div class="landing-vignette"></div>
+        <div class="landing-content">
+          <div class="eyebrow"><span></span> БРАУЗЕРНАЯ ОСАДА <span></span></div>
+          <h1 id="game-title"><small>SMITE</small><strong>KNIGHT</strong></h1>
+          <p class="subtitle">ASHEN SIEGE</p>
+          <p class="pitch">Проведи таран сквозь огонь. Сломай Чёрные врата.<br />Подними знамя там, где падали короли.</p>
+          <div class="landing-actions">
+            <button id="play-solo" class="primary-button"><b>Начать штурм</b><span>Одиночная битва</span></button>
+            <button id="open-multiplayer" class="secondary-button"><b>Сетевая битва</b><span>Комнаты до 8 рыцарей</span></button>
+          </div>
+          <div class="landing-note"><kbd>WASD</kbd> движение <i></i><kbd>ЛКМ</kbd> удар <i></i><kbd>ПКМ</kbd> блок <i></i><kbd>SPACE</kbd> перекат</div>
+        </div>
+        <div class="build-mark">ORIGINAL WEBGL GAME · v1.0</div>
+      </section>
+
+      <section id="lobby" class="screen" aria-labelledby="lobby-title">
+        <div class="panel lobby-panel">
+          <button class="close-button" data-close="lobby" aria-label="Закрыть">×</button>
+          <div class="eyebrow">ВОЕННЫЙ СОВЕТ</div>
+          <h2 id="lobby-title">Сетевая битва</h2>
+          <p>Создай отряд или введи код боевой комнаты.</p>
+          <label>Имя рыцаря<input id="player-name" maxlength="20" value="Рыцарь" /></label>
+          <div class="lobby-actions">
+            <button id="create-room" class="primary-button compact"><b>Создать комнату</b></button>
+            <div class="join-row"><input id="room-code" maxlength="6" placeholder="КОД" /><button id="join-room">Войти</button></div>
+          </div>
+          <p id="lobby-status" class="status-line" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <section id="briefing" class="screen" aria-labelledby="briefing-title">
+        <div class="briefing-card">
+          <div class="mission-number">ОПЕРАЦИЯ I</div>
+          <h2 id="briefing-title">Чёрные врата</h2>
+          <p>Северный легион держит последнюю переправу. Наш таран уже на склоне. За стенами ждёт лорд Варгрим.</p>
+          <div class="mission-objectives">
+            <div><span>01</span><p><b>Провести таран</b>Держись рядом, пока воины толкают его к воротам.</p></div>
+            <div><span>02</span><p><b>Проломить ворота</b>Прикрывай таран от стражи и огненных стрел.</p></div>
+            <div><span>03</span><p><b>Взять внутренний двор</b>Срази Варгрима и подними наше знамя.</p></div>
+          </div>
+          <button id="deploy" class="primary-button"><b>В бой</b><span>Пусть пепел запомнит имя</span></button>
+        </div>
+      </section>
+
+      <div id="hud" class="hidden">
+        <div class="top-hud">
+          <div class="objective-block"><span id="phase-label">ФАЗА I · ПОДЪЁМ</span><strong id="objective">Сопровождайте таран к воротам</strong><div class="objective-progress"><i id="objective-fill"></i></div></div>
+          <div class="battle-count"><span><b id="ally-count">24</b> союзники</span><i></i><span><b id="enemy-count">38</b> враги</span></div>
+        </div>
+        <div class="bars">
+          <div class="crest">SK</div>
+          <div class="bar-stack"><div class="health-bar"><i id="health-fill"></i><span id="health-text">180</span></div><div class="stamina-bar"><i id="stamina-fill"></i></div></div>
+        </div>
+        <div id="weapon-card"><span class="weapon-icon">⚔</span><div><b id="weapon-name">Меч пепла</b><small id="weapon-hint">ЛКМ — удар · ПКМ — блок</small></div></div>
+        <div id="crosshair"><i></i><i></i><i></i><i></i></div>
+        <div id="damage-vignette"></div>
+        <div id="interaction" class="hidden"><kbd>E</kbd><span>Поднять знамя</span></div>
+        <div id="kill-feed"></div>
+        <div id="room-badge" class="hidden"><span>КОМНАТА</span><b id="active-room-code">—</b><small id="online-count">1 рыцарь</small></div>
+        <div id="chat" class="hidden"><div id="chat-messages"></div><form id="chat-form"><input id="chat-input" maxlength="160" autocomplete="off" placeholder="Сообщение отряду…" /></form></div>
+        <button id="chat-toggle" class="hidden" aria-label="Открыть чат">↵</button>
+        <button id="settings-toggle" aria-label="Настройки">⚙</button>
+      </div>
+
+      <section id="pause" class="screen" aria-labelledby="pause-title">
+        <div class="panel pause-panel">
+          <div class="eyebrow">БИТВА ЖДЁТ</div><h2 id="pause-title">Пауза</h2>
+          <button id="resume" class="primary-button compact"><b>Продолжить</b></button>
+          <label class="setting-row"><span>Громкость</span><input id="volume" type="range" min="0" max="100" value="65" /></label>
+          <label class="setting-row"><span>Качество</span><select id="quality"><option value="high">Высокое</option><option value="medium">Среднее</option><option value="low">Низкое</option></select></label>
+          <button id="restart">Начать заново</button>
+        </div>
+      </section>
+
+      <section id="ending" class="screen" aria-labelledby="ending-title">
+        <div class="ending-rays"></div><div class="ending-card"><div class="eyebrow">ЧЁРНЫЕ ВРАТА ПАЛИ</div><h2 id="ending-title">Пепел помнит</h2><p id="ending-stats"></p><button id="play-again" class="primary-button"><b>Повторить штурм</b></button></div>
+      </section>
+
+      <div id="mobile-controls" class="hidden">
+        <div id="joystick"><i></i></div><button id="mobile-block">ЩИТ</button><button id="mobile-attack">УДАР</button><button id="mobile-dodge">↝</button>
+      </div>
+
+      <div id="loading"><div class="loader-emblem">SK</div><div class="loader-line"><i></i></div><span>КУЁМ ПОЛЕ БИТВЫ</span></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

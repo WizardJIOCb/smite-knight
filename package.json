@@ -1,0 +1,32 @@
+{
+  "name": "smite-knight",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:client\" \"npm:dev:server\"",
+    "dev:client": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "dev:server": "tsx watch server/index.ts",
+    "check": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.server.json",
+    "test": "vitest run",
+    "clean:server": "node -e \"require('node:fs').rmSync('dist-server',{recursive:true,force:true})\"",
+    "build": "npm run clean:server && vite build && tsc -p tsconfig.server.json",
+    "start": "node dist-server/server/index.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.10.13",
+    "@types/three": "^0.185.0",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.21.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
+  }
+}

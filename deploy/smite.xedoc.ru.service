@@ -1,0 +1,27 @@
+[Unit]
+Description=SMITE KNIGHT browser castle siege
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/smite.xedoc.ru
+Environment=NODE_ENV=production
+Environment=PORT=3018
+ExecStart=/usr/bin/node dist-server/server/index.js
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

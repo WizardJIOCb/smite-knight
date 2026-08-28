@@ -12,6 +12,14 @@ export const CASTLE_LIMITS = {
   backWallZ: -82,
 } as const;
 
+export function summitAllyRequirement(livingAllies: number): number {
+  return Math.max(1, Math.min(3, Math.floor(livingAllies)));
+}
+
+export function summitAssaultReady(playerAtSummit: boolean, summitAllies: number, livingAllies: number): boolean {
+  return playerAtSummit && summitAllies >= summitAllyRequirement(livingAllies);
+}
+
 export function castleGroundHeight(x: number, z: number): number {
   if (Math.abs(x) > 17 || z > CASTLE_LIMITS.firstStairStartZ || z < CASTLE_LIMITS.backWallZ) return 0;
   if (z >= CASTLE_LIMITS.firstStairEndZ) {

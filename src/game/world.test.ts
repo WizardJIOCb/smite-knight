@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { battlefieldSurfaceAt, CASTLE_LIMITS, castleGroundHeight } from './world';
+import {
+  battlefieldSurfaceAt,
+  CASTLE_LIMITS,
+  castleGroundHeight,
+  summitAllyRequirement,
+  summitAssaultReady,
+} from './world';
 
 describe('multi-tier castle terrain', () => {
   it('raises actors smoothly across both staircases', () => {
@@ -20,5 +26,27 @@ describe('multi-tier castle terrain', () => {
     expect(battlefieldSurfaceAt(0, -52)).toBe('stone');
     expect(battlefieldSurfaceAt(0, -12)).toBe('earth');
     expect(battlefieldSurfaceAt(30, -52)).toBe('earth');
+  });
+});
+
+describe('summit assault objective', () => {
+  it('normally asks for three living allies at the summit', () => {
+    expect(summitAllyRequirement(24)).toBe(3);
+    expect(summitAssaultReady(true, 2, 24)).toBe(false);
+    expect(summitAssaultReady(true, 3, 24)).toBe(true);
+  });
+
+  it('adapts to two survivors', () => {
+    expect(summitAllyRequirement(2)).toBe(2);
+    expect(summitAssaultReady(true, 2, 2)).toBe(true);
+  });
+
+  it('lets the last surviving player continue alone', () => {
+    expect(summitAllyRequirement(1)).toBe(1);
+    expect(summitAssaultReady(true, 1, 1)).toBe(true);
+  });
+
+  it('still requires the player to reach the summit', () => {
+    expect(summitAssaultReady(false, 3, 3)).toBe(false);
   });
 });

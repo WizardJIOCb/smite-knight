@@ -23,7 +23,13 @@ import {
   seededRandom,
   smoothstep,
 } from './math';
-import { battlefieldSurfaceAt, CASTLE_LIMITS, castleGroundHeight } from './world';
+import {
+  battlefieldSurfaceAt,
+  CASTLE_LIMITS,
+  castleGroundHeight,
+  summitAllyRequirement,
+  summitAssaultReady,
+} from './world';
 
 export interface HudState {
   health: number;
@@ -185,6 +191,7 @@ export class SiegeGame {
   private phase = 0;
   private gateHealth = 100;
   private captureProgress = 0;
+  private reservesDeployed = false;
   private yaw = Math.PI;
   private pitch = -0.13;
   private cameraShoulder = 1;
@@ -265,6 +272,7 @@ export class SiegeGame {
     this.phase = 0;
     this.gateHealth = 100;
     this.captureProgress = 0;
+    this.reservesDeployed = false;
     this.kills = 0;
     this.damageDone = 0;
     this.elapsed = 0;
@@ -345,9 +353,11 @@ export class SiegeGame {
   applyNetworkBattleEvent(type: 'gate-hit' | 'phase', value: number): void {
     if (type === 'gate-hit') this.gateHealth = Math.min(this.gateHealth, value);
     else {
+      const previousPhase = this.phase;
       this.phase = Math.max(this.phase, Math.floor(value));
       if (this.phase >= 2) this.gateHealth = 0;
       if (this.phase >= 3) this.boss.rig.root.visible = true;
+      if (previousPhase < 2 && this.phase === 2) this.deployAssaultReserves();
     }
   }
 
@@ -1446,8 +1456,8 @@ export class SiegeGame {
       }
       if (this.gateHealth <= 0) this.breakGate();
     } else if (this.phase === 2) {
-      const summitAllies = this.actors.filter((actor) => actor.team === 'allies' && !actor.dead && actor.rig.root.position.z < CASTLE_LIMITS.secondStairEndZ + 0.5).length;
-      if (this.player.rig.root.position.z < CASTLE_LIMITS.secondStairEndZ + 0.5 && summitAllies >= 3) {
+      const assault = this.summitAssaultState();
+      if (summitAssaultReady(assault.playerAtSummit, assault.summitAllies, assault.livingAllies)) {
         this.phase = 3;
         this.boss.rig.root.visible = true;
         this.bossAbilityTimer = Math.max(2.8, this.level.boss.abilityCooldown * 0.62);
@@ -2463,12 +2473,46 @@ export class SiegeGame {
   private breakGate(): void {
     if (this.phase >= 2) return;
     this.phase = 2;
+    this.deployAssaultReserves();
     this.audio.explosion();
     this.audio.horn();
     this.cameraShake = 1;
     this.spawnImpact(new THREE.Vector3(0, 3, -25.5), 0xcf8b4c, 38);
     this.events.onFeed('<b>Врата открыты!</b> Легион, на первую лестницу!');
     this.events.onBattleEvent('phase', 2);
+  }
+
+  private deployAssaultReserves(): void {
+    if (this.reservesDeployed) return;
+    this.reservesDeployed = true;
+    for (const x of [-2.5, 2.5]) {
+      const reserve = this.createActor(
+        'soldier',
+        'allies',
+        116 + this.level.order * 5,
+        3.92,
+        2.45,
+        20 + this.level.order,
+      );
+      reserve.rig.root.position.set(x, 0, -31.5);
+      reserve.rig.setGroundHeight(0);
+      reserve.cooldown = 0.25 + this.random() * 0.35;
+    }
+    this.events.onFeed('<b>Резерв у пролома.</b> Двое гвардейцев продолжают штурм вместе с вами.');
+  }
+
+  private summitAssaultState(): { summitAllies: number; livingAllies: number; requiredAllies: number; playerAtSummit: boolean } {
+    const summitZ = CASTLE_LIMITS.secondStairEndZ + 0.5;
+    const livingAllies = this.actors.filter((actor) => actor.team === 'allies' && !actor.dead).length;
+    const summitAllies = this.actors.filter(
+      (actor) => actor.team === 'allies' && !actor.dead && actor.rig.root.position.z < summitZ,
+    ).length;
+    return {
+      summitAllies,
+      livingAllies,
+      requiredAllies: summitAllyRequirement(livingAllies),
+      playerAtSummit: !this.player.dead && this.player.rig.root.position.z < summitZ,
+    };
   }
 
   private updateGateVisual(delta: number): void {
@@ -2581,8 +2625,10 @@ export class SiegeGame {
       objective = 'Защитите таран и сокрушите ворота';
       progress = 100 - this.gateHealth;
     } else if (this.phase === 2) {
-      const summitAllies = this.actors.filter((actor) => actor.team === 'allies' && !actor.dead && actor.rig.root.position.z < -64).length;
-      objective = `Прорвитесь на верхний ярус вместе с легионом · ${summitAllies}/3`;
+      const assault = this.summitAssaultState();
+      objective = assault.requiredAllies === 1
+        ? `Последний рыцарь: доберитесь до верхнего яруса · ${assault.summitAllies}/1`
+        : `Прорвитесь на верхний ярус вместе с легионом · ${assault.summitAllies}/${assault.requiredAllies}`;
       progress = clamp((-this.player.rig.root.position.z - 29) / 35 * 100, 0, 100);
     } else if (this.phase === 3) {
       objective = this.boss.dead ? 'Удерживайте E у знамени' : `Сразите: ${this.level.boss.title} ${this.level.boss.name}`;

@@ -507,6 +507,7 @@ export class SiegeGame {
   private createActor(role: Role, team: Team, health: number, speed: number, attackRange: number, damage: number): Actor {
     const rigRole = role === 'player' ? 'soldier' : role;
     const rig = new KnightRig(team, rigRole);
+    rig.root.rotation.y = team === 'allies' ? Math.PI : 0;
     this.scene.add(rig.root);
     const actor: Actor = {
       id: `${team}-${role}-${this.actors.length}`,

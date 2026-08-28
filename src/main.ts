@@ -1,5 +1,6 @@
 import './style.css';
 import { SiegeGame, type HudState } from './game/game';
+import { preloadKnightAssets } from './game/models';
 import { NetworkClient } from './network';
 
 function element<T extends HTMLElement>(selector: string): T {
@@ -56,7 +57,8 @@ const game = new SiegeGame(canvas, {
   onBattleEvent: (type, value) => network.sendBattleEvent(type, value),
 });
 
-window.setTimeout(() => loading.classList.add('ready'), 700);
+const minimumLoadingTime = new Promise<void>((resolve) => window.setTimeout(resolve, 700));
+void Promise.all([preloadKnightAssets(), minimumLoadingTime]).finally(() => loading.classList.add('ready'));
 
 element<HTMLButtonElement>('#play-solo').addEventListener('click', () => {
   multiplayer = false;

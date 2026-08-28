@@ -1,7 +1,126 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { clamp, damp } from './math';
 
 export type RigAction = 'idle' | 'run' | 'attack' | 'block' | 'dead';
+
+type KnightTeam = 'allies' | 'enemies';
+type KnightRole = 'soldier' | 'archer' | 'boss';
+type FactionPalette = KnightTeam | 'boss';
+
+interface DetailedKnightAsset {
+  scene: THREE.Group;
+  animations: THREE.AnimationClip[];
+  crossbow: THREE.Group;
+  factionTextures: Record<FactionPalette, THREE.Texture>;
+}
+
+const DETAILED_KNIGHT_URL = '/assets/kaykit/knight.glb';
+const CROSSBOW_URL = '/assets/kaykit/crossbow.glb';
+const clipNames: Record<KnightRole, Record<RigAction, string>> = {
+  soldier: {
+    idle: 'Idle',
+    run: 'Running_A',
+    attack: '1H_Melee_Attack_Slice_Diagonal',
+    block: 'Blocking',
+    dead: 'Death_A',
+  },
+  archer: {
+    idle: 'Idle',
+    run: 'Running_A',
+    attack: '2H_Ranged_Shoot',
+    block: '2H_Ranged_Aiming',
+    dead: 'Death_A',
+  },
+  boss: {
+    idle: '2H_Melee_Idle',
+    run: 'Running_B',
+    attack: '2H_Melee_Attack_Spin',
+    block: 'Blocking',
+    dead: 'Death_B',
+  },
+};
+
+let detailedAssetPromise: Promise<DetailedKnightAsset> | undefined;
+let detailedAssetWarningShown = false;
+
+function recolorFactionTexture(source: THREE.Texture, target: [number, number, number]): THREE.Texture {
+  const image = source.image as CanvasImageSource & { width: number; height: number };
+  const canvas = document.createElement('canvas');
+  canvas.width = image.width;
+  canvas.height = image.height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) return source;
+  context.drawImage(image, 0, 0);
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+  for (let index = 0; index < pixels.data.length; index += 4) {
+    const red = pixels.data[index];
+    const green = pixels.data[index + 1];
+    const blue = pixels.data[index + 2];
+    if (red < 70 || red - Math.max(green, blue) < 24) continue;
+    const shade = 0.62 + red / 255 * 0.55;
+    pixels.data[index] = Math.min(255, target[0] * shade);
+    pixels.data[index + 1] = Math.min(255, target[1] * shade);
+    pixels.data[index + 2] = Math.min(255, target[2] * shade);
+  }
+  context.putImageData(pixels, 0, 0);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = source.colorSpace;
+  texture.flipY = source.flipY;
+  texture.wrapS = source.wrapS;
+  texture.wrapT = source.wrapT;
+  texture.magFilter = source.magFilter;
+  texture.minFilter = source.minFilter;
+  texture.generateMipmaps = source.generateMipmaps;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function findKnightTexture(scene: THREE.Group): THREE.Texture {
+  let texture: THREE.Texture | undefined;
+  scene.traverse((object) => {
+    if (texture || !(object instanceof THREE.Mesh)) return;
+    const material = Array.isArray(object.material) ? object.material[0] : object.material;
+    if (material instanceof THREE.MeshStandardMaterial && material.map) texture = material.map;
+  });
+  if (!texture) throw new Error('KayKit knight texture is missing');
+  return texture;
+}
+
+function loadDetailedKnightAsset(): Promise<DetailedKnightAsset> {
+  detailedAssetPromise ??= Promise.all([
+    new GLTFLoader().loadAsync(DETAILED_KNIGHT_URL),
+    new GLTFLoader().loadAsync(CROSSBOW_URL),
+  ]).then(([knight, crossbow]) => {
+    const sourceTexture = findKnightTexture(knight.scene);
+    return {
+      scene: knight.scene,
+      animations: knight.animations,
+      crossbow: crossbow.scene,
+      factionTextures: {
+        allies: recolorFactionTexture(sourceTexture, [38, 126, 148]),
+        enemies: recolorFactionTexture(sourceTexture, [151, 35, 47]),
+        boss: recolorFactionTexture(sourceTexture, [137, 67, 23]),
+      },
+    };
+  });
+  return detailedAssetPromise;
+}
+
+function warnDetailedAssetFailure(error: unknown): void {
+  if (detailedAssetWarningShown) return;
+  detailedAssetWarningShown = true;
+  console.warn('Detailed knight assets could not be loaded; using procedural fallback.', error);
+}
+
+export async function preloadKnightAssets(): Promise<void> {
+  try {
+    await loadDetailedKnightAsset();
+  } catch (error) {
+    warnDetailedAssetFailure(error);
+  }
+}
 
 const geometries = {
   torso: new THREE.CapsuleGeometry(0.34, 0.72, 4, 8),
@@ -50,6 +169,8 @@ export class KnightRig {
   readonly weaponPivot = new THREE.Group();
   readonly shieldPivot = new THREE.Group();
   readonly head = new THREE.Group();
+  private readonly team: KnightTeam;
+  private readonly role: KnightRole;
   private readonly cape: THREE.Mesh;
   private action: RigAction = 'idle';
   private attackClock = 0;
@@ -57,8 +178,15 @@ export class KnightRig {
   private speed = 0;
   private damageFlash = 0;
   private readonly armorMeshes: THREE.Mesh[] = [];
+  private detailedModel?: THREE.Group;
+  private mixer?: THREE.AnimationMixer;
+  private activeAnimation?: THREE.AnimationAction;
+  private activeClipName = '';
+  private readonly detailedMaterials: THREE.MeshStandardMaterial[] = [];
 
-  constructor(team: 'allies' | 'enemies', role: 'soldier' | 'archer' | 'boss' = 'soldier') {
+  constructor(team: KnightTeam, role: KnightRole = 'soldier') {
+    this.team = team;
+    this.role = role;
     const boss = role === 'boss';
     const cloth = team === 'allies' ? materials.allyCloth : materials.enemyCloth;
     const capeMaterial = team === 'allies' ? materials.allyCape : materials.enemyCape;
@@ -133,6 +261,7 @@ export class KnightRig {
     if (role !== 'archer') this.buildShield(team, boss);
 
     this.root.traverse((object) => { object.frustumCulled = true; });
+    void loadDetailedKnightAsset().then((asset) => this.mountDetailedModel(asset)).catch(warnDetailedAssetFailure);
   }
 
   setState(action: RigAction, speed: number, delta: number): void {
@@ -140,6 +269,7 @@ export class KnightRig {
       if (action === 'attack') this.attackClock = 0;
       if (action === 'dead') this.deathClock = 0;
       this.action = action;
+      this.playDetailedAction(action);
     }
     this.speed = damp(this.speed, speed, 10, delta);
   }
@@ -152,6 +282,10 @@ export class KnightRig {
     this.damageFlash = Math.max(0, this.damageFlash - delta);
     this.attackClock += delta;
     if (this.action === 'dead') this.deathClock += delta;
+    if (this.mixer) {
+      const animationSpeed = this.action === 'run' ? 0.9 + clamp(this.speed, 0, 1) * 0.3 : 1;
+      this.mixer.update(delta * animationSpeed);
+    }
 
     const run = Math.sin(time * (7.5 + this.speed * 3.5));
     const stride = this.action === 'run' ? clamp(this.speed, 0, 1) : 0;
@@ -180,8 +314,10 @@ export class KnightRig {
       rightArmX = -0.45;
     } else if (this.action === 'dead') {
       const fall = clamp(this.deathClock * 1.9, 0, 1);
-      this.root.rotation.z = damp(this.root.rotation.z, Math.PI * 0.5, 6, delta);
-      this.root.position.y = damp(this.root.position.y, 0.18, 6, delta);
+      if (!this.detailedModel) {
+        this.root.rotation.z = damp(this.root.rotation.z, Math.PI * 0.5, 6, delta);
+        this.root.position.y = damp(this.root.position.y, 0.18, 6, delta);
+      }
       bodyY = -0.12 * fall;
     } else {
       this.root.rotation.z = damp(this.root.rotation.z, 0, 7, delta);
@@ -204,6 +340,107 @@ export class KnightRig {
       const base = (material.userData.baseEmissiveIntensity as number | undefined) ?? 0;
       material.emissiveIntensity = base + emissive;
     }
+    for (const material of this.detailedMaterials) {
+      material.emissiveIntensity = (this.role === 'boss' ? 0.14 : 0) + (this.damageFlash > 0 ? 0.82 : 0);
+    }
+  }
+
+  private mountDetailedModel(asset: DetailedKnightAsset): void {
+    if (this.detailedModel) return;
+    const model = cloneSkeleton(asset.scene) as THREE.Group;
+    model.name = `KayKitKnight_${this.team}_${this.role}`;
+    model.scale.setScalar(0.78);
+
+    const palette: FactionPalette = this.role === 'boss' ? 'boss' : this.team;
+    const materialClones = new Map<THREE.Material, THREE.Material>();
+    const cloneMaterial = (source: THREE.Material): THREE.Material => {
+      const cached = materialClones.get(source);
+      if (cached) return cached;
+      if (!(source instanceof THREE.MeshStandardMaterial)) return source;
+      const material = source.clone();
+      material.map = asset.factionTextures[palette];
+      material.roughness = this.role === 'boss' ? 0.34 : 0.48;
+      material.metalness = this.role === 'boss' ? 0.24 : 0.12;
+      material.emissive.set(this.role === 'boss' ? 0x481007 : 0xff5a31);
+      material.emissiveIntensity = this.role === 'boss' ? 0.14 : 0;
+      materialClones.set(source, material);
+      this.detailedMaterials.push(material);
+      return material;
+    };
+
+    model.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      object.castShadow = true;
+      object.receiveShadow = true;
+      object.frustumCulled = true;
+      object.material = Array.isArray(object.material)
+        ? object.material.map(cloneMaterial)
+        : cloneMaterial(object.material);
+    });
+
+    const accessoryNames = [
+      '1H_Sword_Offhand',
+      'Badge_Shield',
+      'Rectangle_Shield',
+      'Round_Shield',
+      'Spike_Shield',
+      '1H_Sword',
+      '2H_Sword',
+    ];
+    for (const name of accessoryNames) {
+      const accessory = model.getObjectByName(name);
+      if (accessory) accessory.visible = false;
+    }
+
+    if (this.role === 'archer') {
+      const crossbow = asset.crossbow.clone(true);
+      crossbow.name = 'KayKit_Crossbow';
+      crossbow.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return;
+        object.castShadow = true;
+        object.receiveShadow = true;
+      });
+      model.getObjectByName('handslot.r')?.add(crossbow);
+    } else if (this.role === 'boss') {
+      const sword = model.getObjectByName('2H_Sword');
+      if (sword) sword.visible = true;
+    } else {
+      const sword = model.getObjectByName('1H_Sword');
+      const shield = model.getObjectByName(this.team === 'allies' ? 'Rectangle_Shield' : 'Spike_Shield');
+      if (sword) sword.visible = true;
+      if (shield) shield.visible = true;
+    }
+
+    this.body.visible = false;
+    this.root.add(model);
+    this.detailedModel = model;
+    this.mixer = new THREE.AnimationMixer(model);
+    this.playDetailedAction(this.action, true, asset.animations);
+  }
+
+  private playDetailedAction(action: RigAction, immediate = false, clips?: THREE.AnimationClip[]): void {
+    if (!this.mixer || !this.detailedModel) return;
+    const availableClips = clips ?? (this.detailedModel.userData.animationClips as THREE.AnimationClip[] | undefined);
+    if (clips) this.detailedModel.userData.animationClips = clips;
+    if (!availableClips) return;
+    const clipName = clipNames[this.role][action];
+    if (clipName === this.activeClipName) return;
+    const clip = THREE.AnimationClip.findByName(availableClips, clipName);
+    if (!clip) return;
+
+    const next = this.mixer.clipAction(clip);
+    const loop = action !== 'attack' && action !== 'dead';
+    next.reset();
+    next.enabled = true;
+    next.clampWhenFinished = !loop;
+    next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Number.POSITIVE_INFINITY : 1);
+    next.setEffectiveTimeScale(1);
+    next.setEffectiveWeight(1);
+    next.play();
+    if (this.activeAnimation && !immediate) this.activeAnimation.crossFadeTo(next, action === 'dead' ? 0.08 : 0.14, false);
+    else if (this.activeAnimation) this.activeAnimation.stop();
+    this.activeAnimation = next;
+    this.activeClipName = clipName;
   }
 
   private buildArm(group: THREE.Group, armor: THREE.Material): void {

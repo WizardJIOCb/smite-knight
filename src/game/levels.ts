@@ -1,7 +1,8 @@
-export type LevelId = 'ashen-gate' | 'frostbound-pass' | 'verdant-ruins' | 'sunken-foundry' | 'eclipse-citadel' | 'twin-citadels';
+export type LevelId = 'ashen-gate' | 'frostbound-pass' | 'verdant-ruins' | 'sunken-foundry' | 'eclipse-citadel' | 'twin-citadels' | 'open-front';
 export type LevelEnvironment = 'ash' | 'frost' | 'verdant' | 'foundry' | 'eclipse';
 export type BossAbility = 'ember-roar' | 'frost-nova' | 'thorn-call' | 'magma-quake' | 'void-step';
 export type LevelMode = 'siege' | 'citadel-war';
+export type CitadelLayout = 'lanes' | 'open-front';
 
 export interface LevelObjective {
   title: string;
@@ -43,6 +44,7 @@ export interface BossDefinition {
 export interface LevelDefinition {
   id: LevelId;
   mode?: LevelMode;
+  citadelLayout?: CitadelLayout;
   order: number;
   seed: number;
   environment: LevelEnvironment;
@@ -141,7 +143,7 @@ export const LEVELS: readonly LevelDefinition[] = [
     theme: { background: 0x100d24, fog: 0x251849, fogDensity: 0.02, sky: 0x8c75c2, groundLight: 0x110d22, sun: 0xbc9bff, ground: 0x38334e, stone: 0x5b5572, darkStone: 0x29233f, paleStone: 0x817a9b, wood: 0x332842, rock: 0x504965, mountain: 0x17122e, moon: 0xc7a8ff, accent: 0xa866ff, hazard: 0x9b48ff },
   },
   {
-    id: 'twin-citadels', mode: 'citadel-war', order: 6, seed: 0x7c1ade, environment: 'ash', operation: 'РЕЖИМ · ВЕЛИКАЯ ВОЙНА',
+    id: 'twin-citadels', mode: 'citadel-war', citadelLayout: 'lanes', order: 6, seed: 0x7c1ade, environment: 'ash', operation: 'РЕЖИМ · ВЕЛИКАЯ ВОЙНА',
     title: 'Война двух цитаделей', subtitle: 'TWIN CITADELS', cardLine: 'Два огромных замка, шесть троп и непрерывные волны армий.',
     briefing: 'Две цитадели стоят друг напротив друга, а между ними пролегают шесть фронтов. Выбирай тропу, поддерживай разные отряды и сокруши вражескую крепость раньше, чем падёт наша.',
     objectives: [
@@ -154,6 +156,21 @@ export const LEVELS: readonly LevelDefinition[] = [
     enemyCount: 0, allyCount: 0, playerHealth: 240, playerDamage: 46, artilleryDelay: [99, 99],
     endingEyebrow: 'КРАСНЫЙ БАСТИОН РУХНУЛ', endingTitle: 'Шесть дорог ведут домой',
     theme: { background: 0x182638, fog: 0x43566a, fogDensity: 0.009, sky: 0xa9c9e4, groundLight: 0x263a2c, sun: 0xffdfb3, ground: 0x56634b, stone: 0x69798b, darkStone: 0x303c4e, paleStone: 0xa9b8c2, wood: 0x55402b, rock: 0x4d574d, mountain: 0x253547, moon: 0xe5efff, accent: 0x59bfff, hazard: 0xff4b3d },
+  },
+  {
+    id: 'open-front', mode: 'citadel-war', citadelLayout: 'open-front', order: 7, seed: 0x0f3a71, environment: 'verdant', operation: 'РЕЖИМ · ОТКРЫТЫЙ ФРОНТ',
+    title: 'Битва на равнине', subtitle: 'THE OPEN FRONT', cardLine: 'Две цитадели, открытое поле и живая линия фронта без дорог.',
+    briefing: 'Между цитаделями больше нет заданных путей. Армии свободно растекаются по всей равнине, ищут ближайшего врага и сцепляются в непрерывный фронт примерно в центре поля.',
+    objectives: [
+      { title: 'Встретить врага в поле', text: 'Отряды сами выбирают направление и сходятся по всей ширине равнины.' },
+      { title: 'Укреплять слабый фланг', text: 'Следи, где строй прогнулся, и помогай союзникам остановить прорыв.' },
+      { title: 'Продавить линию фронта', text: 'Разорви вражеский строй и доведи наступление до красной цитадели.' },
+    ],
+    phaseNames: ['I · СБЛИЖЕНИЕ', 'II · ЛИНИЯ ФРОНТА', 'III · ПЕРЕЛОМ', 'IV · ОБЩИЙ НАТИСК'],
+    boss: { name: 'Багряная твердыня', title: 'Вражеская цитадель', abilityName: 'Открытый фронт', ability: 'thorn-call', health: 7000, speed: 0, attackRange: 0, damage: 0, abilityCooldown: 99, color: 0xe94f3d },
+    enemyCount: 0, allyCount: 0, playerHealth: 240, playerDamage: 46, artilleryDelay: [99, 99],
+    endingEyebrow: 'ЛИНИЯ ВРАГА ПРОРВАНА', endingTitle: 'Поле осталось за нами',
+    theme: { background: 0x21313a, fog: 0x68766b, fogDensity: 0.0075, sky: 0xc7d6cb, groundLight: 0x334634, sun: 0xffe6ad, ground: 0x667051, stone: 0x747b72, darkStone: 0x39433f, paleStone: 0xb8b9a7, wood: 0x57452f, rock: 0x565c4d, mountain: 0x35453f, moon: 0xe9f0df, accent: 0xe5b84c, hazard: 0xe94f3d },
   },
 ] as const;
 

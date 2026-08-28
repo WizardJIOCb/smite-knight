@@ -12,6 +12,7 @@ export const CITADEL_UNIT_CAP = 150;
 export const CITADEL_CASTLE_Z = 76;
 export const CITADEL_FRONT_Z = 66;
 export const CITADEL_SPAWN_Z = 54;
+export const CITADEL_OPEN_FRONT_HALF_WIDTH = 54;
 
 const laneOffsets = [-45, -27, -9, 9, 27, 45] as const;
 const laneBends = [-5.5, 4.2, -3.2, 3.2, -4.2, 5.5] as const;
@@ -44,6 +45,18 @@ export function citadelLaneAdvance(lane: number, team: CitadelTeam, currentZ: nu
     ? Math.max(destinationZ, currentZ - step)
     : Math.min(destinationZ, currentZ + step);
   return citadelLanePoint(lane, z);
+}
+
+export function citadelOpenFrontAdvance(team: CitadelTeam, currentZ: number, anchorX: number, wanderTime: number, step = 10): CitadelPoint {
+  const destinationZ = team === 'allies' ? -CITADEL_FRONT_Z + 3 : CITADEL_FRONT_Z - 3;
+  const z = team === 'allies'
+    ? Math.max(destinationZ, currentZ - step)
+    : Math.min(destinationZ, currentZ + step);
+  const x = Math.max(
+    -CITADEL_OPEN_FRONT_HALF_WIDTH,
+    Math.min(CITADEL_OPEN_FRONT_HALF_WIDTH, anchorX + Math.sin(wanderTime) * 4.5),
+  );
+  return { x, z };
 }
 
 export function citadelWaveSquad(wave: number, lane: number): readonly CitadelUnitRole[] {

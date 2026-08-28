@@ -80,7 +80,7 @@ input:focus, select:focus { border-color: #c18344; box-shadow: 0 0 0 2px rgba(19
 .map-select-panel { position: relative; width: min(1180px, calc(100vw - 36px)); max-height: calc(100vh - 36px); overflow: auto; padding: 42px; border: 1px solid #4d4234; background: linear-gradient(145deg, rgba(20,21,21,.98), rgba(7,8,8,.98)); box-shadow: 0 28px 100px #000; }
 .map-select-panel h2 { margin: 7px 0 5px; font: 700 52px/1 'Cormorant Garamond', serif; }
 .map-select-panel > p { margin: 0 0 25px; color: #8f887e; font-size: 12px; }
-.level-grid { display: grid; grid-template-columns: repeat(3, minmax(190px, 1fr)); gap: 12px; }
+.level-grid { display: grid; grid-template-columns: repeat(4, minmax(190px, 1fr)); gap: 12px; }
 .level-card { --level-accent: #c76a34; position: relative; min-height: 280px; overflow: hidden; padding: 22px 18px 18px; border: 1px solid #403b35; background: linear-gradient(160deg, color-mix(in srgb, var(--level-accent) 18%, #171819), #080909 62%); cursor: pointer; text-align: left; transition: transform .2s, border-color .2s, box-shadow .2s; }
 .level-card::before { content: ''; position: absolute; inset: 0; opacity: .22; background: radial-gradient(circle at 75% 5%, var(--level-accent), transparent 43%), repeating-linear-gradient(130deg, transparent 0 19px, rgba(255,255,255,.03) 20px); }
 .level-card:hover { transform: translateY(-5px); border-color: var(--level-accent); box-shadow: 0 16px 45px color-mix(in srgb, var(--level-accent) 20%, transparent); }

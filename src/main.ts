@@ -295,12 +295,14 @@ function renderLevelUi(): void {
   document.querySelector<HTMLMetaElement>('meta[name="description"]')?.setAttribute('content', `${currentLevel.title}: ${currentLevel.cardLine}`);
   document.documentElement.style.setProperty('--ember', colorHex(currentLevel.theme.accent));
   element('.subtitle').textContent = 'FIVE CROWNS';
-  element('.pitch').innerHTML = 'Пять крепостей и одна Великая война.<br />Проходи кампанию подряд или выбирай любой фронт.';
+  element('.pitch').innerHTML = 'Пять крепостей и две Великие войны.<br />Проходи кампанию подряд или выбирай любой фронт.';
   element('#campaign-continue').textContent = `${campaign.completed.length}/5 завершено · продолжить: ${getLevel(nextCampaignLevel(campaign)).title}`;
   element('#mission-number').textContent = currentLevel.operation;
   element('#briefing-title').textContent = currentLevel.title;
   element('#briefing-copy').textContent = currentLevel.briefing;
-  element('#deploy span').textContent = currentLevel.mode === 'citadel-war' ? 'Шесть фронтов ждут командира' : 'Пусть пепел запомнит имя';
+  element('#deploy span').textContent = currentLevel.citadelLayout === 'open-front'
+    ? 'Открытое поле ждёт командира'
+    : currentLevel.mode === 'citadel-war' ? 'Шесть фронтов ждут командира' : 'Пусть пепел запомнит имя';
   const objectives = element('#mission-objectives');
   objectives.replaceChildren(...currentLevel.objectives.map((objective, index) => {
     const item = document.createElement('div');
@@ -334,8 +336,10 @@ function createLevelCard(level: LevelDefinition): HTMLButtonElement {
   copy.textContent = level.cardLine;
   const boss = document.createElement('span');
   boss.className = 'boss-line';
-  boss.textContent = level.mode === 'citadel-war'
-    ? '6 троп · волны пехоты, стрелков и тяжёлых бойцов'
+  boss.textContent = level.citadelLayout === 'open-front'
+    ? 'Без дорог · свободное движение · живая линия фронта'
+    : level.mode === 'citadel-war'
+      ? '6 троп · волны пехоты, стрелков и тяжёлых бойцов'
     : `${level.boss.title} · ${level.boss.name}`;
   const completion = document.createElement('span');
   completion.className = 'completion';

@@ -10,12 +10,14 @@ import {
   CITADEL_FRONT_Z,
   CITADEL_LANE_COUNT,
   CITADEL_MAX_HEALTH,
+  CITADEL_OPEN_FRONT_HALF_WIDTH,
   CITADEL_SPAWN_Z,
   CITADEL_UNIT_CAP,
   citadelBattlePhase,
   citadelLaneAdvance,
   citadelLaneGate,
   citadelLanePoint,
+  citadelOpenFrontAdvance,
   citadelWaveSquad,
   damageCitadel,
 } from './citadelWar';
@@ -115,6 +117,8 @@ interface Actor {
   lastAttacker?: Actor;
   citadelLane?: number;
   citadelUnit?: boolean;
+  citadelFrontX?: number;
+  citadelWanderPhase?: number;
 }
 
 interface Projectile {
@@ -199,6 +203,7 @@ export class SiegeGame {
   private readonly clock = new THREE.Clock();
   private readonly random: () => number;
   private readonly isCitadelWar: boolean;
+  private readonly isOpenCitadelFront: boolean;
   private readonly keys = new Set<string>();
   private readonly actors: Actor[] = [];
   private readonly projectiles: Projectile[] = [];
@@ -261,6 +266,7 @@ export class SiegeGame {
     this.events = events;
     this.level = level;
     this.isCitadelWar = level.mode === 'citadel-war';
+    this.isOpenCitadelFront = level.citadelLayout === 'open-front';
     this.random = seededRandom(level.seed);
     this.fireballTimer = level.artilleryDelay[0];
     this.bossAbilityTimer = level.boss.abilityCooldown;
@@ -457,29 +463,33 @@ export class SiegeGame {
   }
 
   private buildCitadelWarArena(): void {
-    const pathMaterial = new THREE.MeshStandardMaterial({ color: 0x85745b, roughness: 0.98, metalness: 0 });
-    const laneGlow = new THREE.MeshStandardMaterial({ color: 0x334c63, emissive: this.level.theme.accent, emissiveIntensity: 0.42, roughness: 0.55 });
-    for (let lane = 0; lane < CITADEL_LANE_COUNT; lane += 1) {
-      let previous = citadelLanePoint(lane, -CITADEL_FRONT_Z);
-      for (let step = 1; step <= 22; step += 1) {
-        const z = -CITADEL_FRONT_Z + step / 22 * CITADEL_FRONT_Z * 2;
-        const next = citadelLanePoint(lane, z);
-        const dx = next.x - previous.x;
-        const dz = next.z - previous.z;
-        const length = Math.hypot(dx, dz);
-        const strip = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.1, length + 0.16), pathMaterial);
-        strip.position.set((previous.x + next.x) * 0.5, 0.02, (previous.z + next.z) * 0.5);
-        strip.rotation.y = Math.atan2(dx, dz);
-        strip.receiveShadow = true;
-        this.scene.add(strip);
-        previous = next;
-      }
-      for (const z of [-44, -20, 20, 44]) {
-        const point = citadelLanePoint(lane, z);
-        const marker = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.42, 1.4, 8), laneGlow);
-        marker.position.set(point.x, 0.7, point.z);
-        marker.castShadow = true;
-        this.scene.add(marker);
+    if (!this.isOpenCitadelFront) {
+      const pathMaterial = new THREE.MeshStandardMaterial({ color: 0x85745b, roughness: 0.98, metalness: 0 });
+      const laneGlow = new THREE.MeshStandardMaterial({ color: 0x334c63, emissive: this.level.theme.accent, emissiveIntensity: 0.42, roughness: 0.55 });
+      for (let lane = 0; lane < CITADEL_LANE_COUNT; lane += 1) {
+        let previous = citadelLanePoint(lane, -CITADEL_FRONT_Z);
+        for (let step = 1; step <= 22; step += 1) {
+          const z = -CITADEL_FRONT_Z + step / 22 * CITADEL_FRONT_Z * 2;
+          const next = citadelLanePoint(lane, z);
+          const dx = next.x - previous.x;
+          const dz = next.z - previous.z;
+          const length = Math.hypot(dx, dz);
+          const strip = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.1, length + 0.16), pathMaterial);
+          strip.name = 'citadel-path-segment';
+          strip.position.set((previous.x + next.x) * 0.5, 0.02, (previous.z + next.z) * 0.5);
+          strip.rotation.y = Math.atan2(dx, dz);
+          strip.receiveShadow = true;
+          this.scene.add(strip);
+          previous = next;
+        }
+        for (const z of [-44, -20, 20, 44]) {
+          const point = citadelLanePoint(lane, z);
+          const marker = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.42, 1.4, 8), laneGlow);
+          marker.name = 'citadel-path-marker';
+          marker.position.set(point.x, 0.7, point.z);
+          marker.castShadow = true;
+          this.scene.add(marker);
+        }
       }
     }
 
@@ -487,11 +497,15 @@ export class SiegeGame {
     this.enemyCitadelCore = this.createCitadelCastle('enemies', -CITADEL_CASTLE_Z, Math.PI);
 
     const rockMaterial = new THREE.MeshStandardMaterial({ color: this.level.theme.rock, roughness: 1, flatShading: true });
-    for (let index = 0; index < 38; index += 1) {
+    for (let index = 0; index < (this.isOpenCitadelFront ? 30 : 38); index += 1) {
       const x = (this.random() - 0.5) * 124;
       const z = (this.random() - 0.5) * 112;
-      const nearestLane = Math.min(...Array.from({ length: CITADEL_LANE_COUNT }, (_, lane) => Math.abs(x - citadelLanePoint(lane, z).x)));
-      if (nearestLane < 4.6) continue;
+      if (this.isOpenCitadelFront) {
+        if (Math.abs(z) < 14 || Math.abs(z) > 48) continue;
+      } else {
+        const nearestLane = Math.min(...Array.from({ length: CITADEL_LANE_COUNT }, (_, lane) => Math.abs(x - citadelLanePoint(lane, z).x)));
+        if (nearestLane < 4.6) continue;
+      }
       const radius = 0.45 + this.random() * 1.15;
       const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(radius, 0), rockMaterial);
       rock.position.set(x, radius * 0.45, z);
@@ -1393,7 +1407,9 @@ export class SiegeGame {
     this.citadelLaneCursor = 0;
     this.citadelWaveTimer = 5;
     this.phase = 0;
-    this.events.onFeed('<b>Шесть фронтов открыты.</b> Первая волна вышла из обеих цитаделей.');
+    this.events.onFeed(this.isOpenCitadelFront
+      ? '<b>Армии вышли в открытое поле.</b> Линия фронта формируется без заданных путей.'
+      : '<b>Шесть фронтов открыты.</b> Первая волна вышла из обеих цитаделей.');
     this.emitHud(true);
   }
 
@@ -1410,13 +1426,18 @@ export class SiegeGame {
         role === 'archer' ? 15.5 : role === 'brute' ? 2.9 : 2.45,
         (role === 'brute' ? 32 : role === 'archer' ? 15 : 20) + Math.min(12, wave * 0.5),
       );
-      const z = direction * (CITADEL_SPAWN_Z + index * 1.55);
+      const z = direction * (CITADEL_SPAWN_Z + index * 1.55 + (this.isOpenCitadelFront ? this.random() * 2.4 : 0));
       const point = citadelLanePoint(lane, z);
-      actor.rig.root.position.set(point.x + (index - 1) * 0.72, 0, z);
+      const frontX = this.isOpenCitadelFront
+        ? clamp(citadelLanePoint(lane, 0).x + (this.random() - 0.5) * 11, -CITADEL_OPEN_FRONT_HALF_WIDTH, CITADEL_OPEN_FRONT_HALF_WIDTH)
+        : point.x;
+      actor.rig.root.position.set(frontX + (index - 1) * 0.72, 0, z);
       actor.rig.root.rotation.y = team === 'allies' ? Math.PI : 0;
       actor.rig.setGroundHeight(0);
       actor.citadelLane = lane;
       actor.citadelUnit = true;
+      actor.citadelFrontX = frontX;
+      actor.citadelWanderPhase = this.isOpenCitadelFront ? this.random() * Math.PI * 2 : 0;
       actor.cooldown = 0.15 + index * 0.16;
     });
   }
@@ -1758,13 +1779,15 @@ export class SiegeGame {
       if (livingArmySize >= CITADEL_UNIT_CAP) {
         this.citadelWaveTimer = 2;
       } else {
-        const lane = this.citadelLaneCursor;
+        const lane = this.isOpenCitadelFront ? Math.floor(this.random() * CITADEL_LANE_COUNT) : this.citadelLaneCursor;
         this.spawnCitadelSquad('allies', lane, this.citadelWave);
         this.spawnCitadelSquad('enemies', lane, this.citadelWave);
         this.citadelLaneCursor = (this.citadelLaneCursor + 1) % CITADEL_LANE_COUNT;
-        this.citadelWaveTimer = 3.4;
+        this.citadelWaveTimer = this.isOpenCitadelFront ? 3 : 3.4;
         if (this.citadelLaneCursor === 0) {
-          this.events.onFeed(`<b>Волна ${this.citadelWave} вышла.</b> Все шесть троп получили подкрепление.`);
+          this.events.onFeed(this.isOpenCitadelFront
+            ? `<b>Волна ${this.citadelWave} вышла.</b> Подкрепления свободно перестраивают линию фронта.`
+            : `<b>Волна ${this.citadelWave} вышла.</b> Все шесть троп получили подкрепление.`);
           this.audio.horn();
           this.citadelWave += 1;
         }
@@ -1975,7 +1998,7 @@ export class SiegeGame {
     const escortPosition = !this.isCitadelWar && actor.team === 'allies' && this.phase < 2 ? this.getActorDestination(actor) : undefined;
     for (const candidate of this.actors) {
       if (candidate.dead || candidate.team === actor.team || candidate === this.boss && this.phase < 3) continue;
-      if (this.isCitadelWar && actor.citadelUnit && candidate.citadelUnit && actor.citadelLane !== candidate.citadelLane) continue;
+      if (this.isCitadelWar && !this.isOpenCitadelFront && actor.citadelUnit && candidate.citadelUnit && actor.citadelLane !== candidate.citadelLane) continue;
       if (Math.abs(candidate.rig.root.position.y - actor.rig.root.position.y) > 4.25) continue;
       const separatedByClosedGate = !this.isCitadelWar && this.phase < 2
         && ((actor.rig.root.position.z > -24.3 && candidate.rig.root.position.z < -29.8)
@@ -1993,6 +2016,18 @@ export class SiegeGame {
 
   private getActorDestination(actor: Actor): THREE.Vector3 {
     if (this.isCitadelWar && actor.citadelUnit) {
+      if (this.isOpenCitadelFront) {
+        const targetTeam: Team = actor.team === 'allies' ? 'enemies' : 'allies';
+        const gate = citadelLaneGate(actor.citadelLane ?? 0, targetTeam);
+        const castleApproach = smoothstep(45, 60, Math.abs(actor.rig.root.position.z));
+        const next = citadelOpenFrontAdvance(
+          actor.team,
+          actor.rig.root.position.z,
+          actor.citadelFrontX ?? actor.rig.root.position.x,
+          this.elapsed * 0.62 + (actor.citadelWanderPhase ?? 0) + actor.rig.root.position.z * 0.027,
+        );
+        return new THREE.Vector3(next.x + (gate.x - next.x) * castleApproach, 0, next.z);
+      }
       const next = citadelLaneAdvance(actor.citadelLane ?? 0, actor.team, actor.rig.root.position.z);
       return new THREE.Vector3(next.x, 0, next.z);
     }

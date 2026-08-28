@@ -3,11 +3,13 @@ import {
   CITADEL_FRONT_Z,
   CITADEL_LANE_COUNT,
   CITADEL_MAX_HEALTH,
+  CITADEL_OPEN_FRONT_HALF_WIDTH,
   CITADEL_UNIT_CAP,
   citadelBattlePhase,
   citadelLaneAdvance,
   citadelLaneGate,
   citadelLaneX,
+  citadelOpenFrontAdvance,
   citadelWaveSquad,
   damageCitadel,
 } from './citadelWar';
@@ -27,6 +29,14 @@ describe('war of two citadels', () => {
     expect(citadelLaneAdvance(2, 'allies', 20).z).toBe(10);
     expect(citadelLaneAdvance(2, 'enemies', -20).z).toBe(-10);
     expect(citadelLaneAdvance(2, 'allies', -62).z).toBe(-63);
+  });
+
+  it('advances a free army across the field with bounded lateral wandering', () => {
+    expect(citadelOpenFrontAdvance('allies', 20, 7, 0).z).toBe(10);
+    expect(citadelOpenFrontAdvance('enemies', -20, -7, Math.PI / 2).z).toBe(-10);
+    expect(citadelOpenFrontAdvance('allies', 20, 7, 0).x).not.toBe(citadelOpenFrontAdvance('allies', 20, 7, Math.PI / 2).x);
+    expect(citadelOpenFrontAdvance('allies', 0, 100, Math.PI / 2).x).toBe(CITADEL_OPEN_FRONT_HALF_WIDTH);
+    expect(citadelOpenFrontAdvance('enemies', 0, -100, -Math.PI / 2).x).toBe(-CITADEL_OPEN_FRONT_HALF_WIDTH);
   });
 
   it('rotates varied squads across lanes and waves', () => {

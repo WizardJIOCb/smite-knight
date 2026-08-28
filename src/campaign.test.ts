@@ -17,7 +17,7 @@ describe('campaign progress', () => {
   });
 
   it('discards unknown or malformed saved values', () => {
-    expect(normalizeCampaignProgress({ completed: ['ashen-gate', 'twin-citadels', 'unknown'], selected: 'unknown' })).toEqual({
+    expect(normalizeCampaignProgress({ completed: ['ashen-gate', 'twin-citadels', 'open-front', 'unknown'], selected: 'unknown' })).toEqual({
       completed: ['ashen-gate'],
       selected: 'ashen-gate',
     });
@@ -28,5 +28,12 @@ describe('campaign progress', () => {
     expect(progress.completed).toEqual([]);
     expect(progress.selected).toBe('twin-citadels');
     expect(normalizeCampaignProgress(progress).selected).toBe('twin-citadels');
+  });
+
+  it('keeps the open front selectable without adding it to campaign completion', () => {
+    const progress = completeCampaignLevel(defaultCampaignProgress(), 'open-front');
+    expect(progress.completed).toEqual([]);
+    expect(progress.selected).toBe('open-front');
+    expect(normalizeCampaignProgress(progress).selected).toBe('open-front');
   });
 });

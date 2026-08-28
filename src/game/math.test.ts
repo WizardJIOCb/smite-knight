@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { angleDelta, clamp, dampAngle, movementDirection, pointInAttackArc, ramEscortOffset, seededRandom, setRightPerpendicular, smoothstep } from './math';
+import { angleDelta, clamp, dampAngle, formationFollowVelocity, formationShouldMove, movementDirection, pointInAttackArc, ramEscortGateShift, ramEscortOffset, seededRandom, setRightPerpendicular, smoothstep } from './math';
 
 describe('game math', () => {
   it('clamps and smooths normalized values', () => {
@@ -75,5 +75,19 @@ describe('game math', () => {
       }
     }
     expect(minimumDistance).toBeGreaterThanOrEqual(1.75);
+    expect(ramEscortGateShift(15)).toBe(0);
+    expect(ramEscortGateShift(-21.875)).toBeCloseTo(2.375, 5);
+  });
+
+  it('keeps an escort running with a moving ram without chattering at the stop threshold', () => {
+    expect(formationShouldMove(0.05, false, 1.25)).toBe(true);
+    expect(formationShouldMove(0.5, true, 0)).toBe(true);
+    expect(formationShouldMove(0.5, false, 0)).toBe(false);
+    expect(formationShouldMove(0.2, true, 0)).toBe(false);
+
+    const velocity = formationFollowVelocity(0, -0.04, 2.75, -1.25);
+    expect(velocity.x).toBeCloseTo(0, 5);
+    expect(velocity.z).toBeLessThanOrEqual(-1.25);
+    expect(Math.hypot(velocity.x, velocity.z)).toBeLessThanOrEqual(2.75);
   });
 });

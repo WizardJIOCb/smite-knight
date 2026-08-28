@@ -52,6 +52,35 @@ export function ramEscortOffset(slot: number): { x: number; z: number } {
   };
 }
 
+export function ramEscortGateShift(ramZ: number): number {
+  const foremostRowOffset = -3.5;
+  const outsideGateLimit = -23;
+  return Math.max(0, outsideGateLimit - (ramZ + foremostRowOffset));
+}
+
+export function formationShouldMove(distance: number, wasMoving: boolean, anchorSpeed = 0): boolean {
+  if (anchorSpeed > 0.04) return true;
+  return distance > (wasMoving ? 0.32 : 0.92);
+}
+
+export function formationFollowVelocity(
+  errorX: number,
+  errorZ: number,
+  maxSpeed: number,
+  anchorVelocityZ = 0,
+): { x: number; z: number } {
+  const distance = Math.hypot(errorX, errorZ);
+  const correctionSpeed = Math.min(maxSpeed, distance * 2.8);
+  let x = distance > 0.0001 ? errorX / distance * correctionSpeed : 0;
+  let z = (distance > 0.0001 ? errorZ / distance * correctionSpeed : 0) + anchorVelocityZ;
+  const speed = Math.hypot(x, z);
+  if (speed > maxSpeed) {
+    x = x / speed * maxSpeed;
+    z = z / speed * maxSpeed;
+  }
+  return { x, z };
+}
+
 export function angleDelta(from: number, to: number): number {
   return Math.atan2(Math.sin(to - from), Math.cos(to - from));
 }

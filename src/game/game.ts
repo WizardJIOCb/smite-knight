@@ -12,8 +12,11 @@ import {
   damp,
   dampAngle,
   distanceXZ,
+  formationFollowVelocity,
+  formationShouldMove,
   movementDirection,
   pointInAttackArc,
+  ramEscortGateShift,
   ramEscortOffset,
   seededRandom,
   smoothstep,
@@ -157,6 +160,7 @@ export class SiegeGame {
   private kills = 0;
   private damageDone = 0;
   private ramStrikeTimer = 0;
+  private ramVelocityZ = 0;
   private fireballTimer = 2.5;
   private jumpTimer = 0;
   private readonly jumpDuration = 0.38;
@@ -228,6 +232,7 @@ export class SiegeGame {
     this.respawnTimer = 0;
     this.jumpTimer = 0;
     this.jumpTrailTimer = 0;
+    this.ramVelocityZ = 0;
     this.ram.position.set(0, 0, 15);
     this.gateLeft.rotation.y = 0;
     this.gateRight.rotation.y = 0;
@@ -982,10 +987,15 @@ export class SiegeGame {
   }
 
   private updateObjectives(delta: number): void {
+    this.ramVelocityZ = 0;
     if (this.phase === 0) {
       const playerNear = distanceXZ(this.player.rig.root.position, this.ram.position) < 16;
       const nearbyAllies = this.actors.filter((actor) => !actor.dead && actor.team === 'allies' && distanceXZ(actor.rig.root.position, this.ram.position) < 8).length;
-      if (playerNear && nearbyAllies >= 2) this.ram.position.z = Math.max(-21.9, this.ram.position.z - delta * 1.25);
+      if (playerNear && nearbyAllies >= 2) {
+        const previousZ = this.ram.position.z;
+        this.ram.position.z = Math.max(-21.9, previousZ - delta * 1.25);
+        if (delta > 0) this.ramVelocityZ = (this.ram.position.z - previousZ) / delta;
+      }
       if (this.ram.position.z <= -21.85) {
         this.phase = 1;
         this.ramStrikeTimer = 0.4;
@@ -1055,7 +1065,9 @@ export class SiegeGame {
         if (distance > desiredRange && actor.action !== 'attack') {
           const separation = this.computeSeparation(actor);
           const strafe = this.temp2.set(direction.z, 0, -direction.x).multiplyScalar(actor.role === 'archer' ? actor.strafe * 0.25 : 0);
-          actor.rig.root.position.addScaledVector(direction.add(strafe).add(separation), actor.speed * delta);
+          direction.add(strafe).addScaledVector(separation, 1.65);
+          if (direction.lengthSq() > 1) direction.normalize();
+          actor.rig.root.position.addScaledVector(direction, actor.speed * delta);
           moving = true;
           actor.action = 'run';
         } else if (actor.cooldown <= 0 && actor.action !== 'attack') {
@@ -1069,14 +1081,22 @@ export class SiegeGame {
         const destination = this.getActorDestination(actor);
         const direction = this.temp.subVectors(destination, actor.rig.root.position);
         direction.y = 0;
-        if (direction.lengthSq() > 1) {
-          const separation = this.computeSeparation(actor).multiplyScalar(1.25);
-          direction.normalize().add(separation);
-          if (direction.lengthSq() > 1) direction.normalize();
-          actor.rig.root.position.addScaledVector(direction, actor.speed * delta * 0.72);
-          actor.rig.root.rotation.y = dampAngle(actor.rig.root.rotation.y, Math.atan2(direction.x, direction.z), 6, delta);
+        const distance = direction.length();
+        const escortingRam = actor.team === 'allies' && this.phase < 2;
+        const formationPinnedAtGate = ramEscortGateShift(this.ram.position.z) > 0;
+        const anchorVelocityZ = escortingRam && this.phase === 0 && !formationPinnedAtGate ? this.ramVelocityZ : 0;
+        if (formationShouldMove(distance, actor.action === 'run', Math.abs(anchorVelocityZ))) {
+          const maxSpeed = actor.speed * 0.72;
+          const velocity = escortingRam
+            ? formationFollowVelocity(direction.x, direction.z, maxSpeed, anchorVelocityZ)
+            : { x: distance > 0.001 ? direction.x / distance * maxSpeed : 0, z: distance > 0.001 ? direction.z / distance * maxSpeed : 0 };
+          const separation = this.computeSeparation(actor);
+          direction.set(velocity.x, 0, velocity.z).addScaledVector(separation, actor.speed * 0.82);
+          if (direction.lengthSq() > maxSpeed * maxSpeed) direction.setLength(maxSpeed);
+          actor.rig.root.position.addScaledVector(direction, delta);
+          if (direction.lengthSq() > 0.0025) actor.rig.root.rotation.y = dampAngle(actor.rig.root.rotation.y, Math.atan2(direction.x, direction.z), 6, delta);
           actor.action = 'run';
-          moving = true;
+          moving = direction.lengthSq() > 0.0025;
         } else actor.action = 'idle';
       }
 
@@ -1104,9 +1124,15 @@ export class SiegeGame {
   private findTarget(actor: Actor): Actor | undefined {
     let best: Actor | undefined;
     let bestDistance = actor.role === 'archer' ? 22 : 11;
+    const escortPosition = actor.team === 'allies' && this.phase < 2 ? this.getActorDestination(actor) : undefined;
     for (const candidate of this.actors) {
       if (candidate.dead || candidate.team === actor.team || candidate === this.boss && this.phase < 3) continue;
       if (Math.abs(candidate.rig.root.position.y - actor.rig.root.position.y) > 4.25) continue;
+      const separatedByClosedGate = this.phase < 2
+        && ((actor.rig.root.position.z > -24.3 && candidate.rig.root.position.z < -29.8)
+          || (actor.rig.root.position.z < -29.8 && candidate.rig.root.position.z > -24.3));
+      if (separatedByClosedGate) continue;
+      if (escortPosition && distanceXZ(candidate.rig.root.position, escortPosition) > 7.5) continue;
       const distance = distanceXZ(actor.rig.root.position, candidate.rig.root.position);
       if (distance < bestDistance) {
         bestDistance = distance;
@@ -1122,7 +1148,8 @@ export class SiegeGame {
     if (actor.team === 'allies') {
       if (this.phase < 2) {
         const escort = ramEscortOffset(index - 1);
-        return new THREE.Vector3(this.ram.position.x + escort.x, 0, this.ram.position.z + escort.z);
+        const gateShift = ramEscortGateShift(this.ram.position.z);
+        return new THREE.Vector3(this.ram.position.x + escort.x, 0, this.ram.position.z + escort.z + gateShift);
       }
       if (actor.rig.root.position.z > CASTLE_LIMITS.firstStairEndZ) return new THREE.Vector3(lane, 0, -49);
       if (actor.rig.root.position.z > CASTLE_LIMITS.secondStairEndZ) return new THREE.Vector3(lane * 0.78, 0, -67);
@@ -1137,13 +1164,16 @@ export class SiegeGame {
 
   private computeSeparation(actor: Actor): THREE.Vector3 {
     const force = new THREE.Vector3();
-    const minimumSpacing = actor.team === 'allies' && this.phase < 2 ? 1.35 : 1.05;
+    const friendlySpacing = actor.team === 'allies' && this.phase < 2 ? 1.65 : 1.12;
     for (const other of this.actors) {
       if (other === actor || other.dead) continue;
       if (Math.abs(actor.rig.root.position.y - other.rig.root.position.y) > 2.5) continue;
       const distance = distanceXZ(actor.rig.root.position, other.rig.root.position);
-      if (distance > 0 && distance < minimumSpacing) {
-        force.add(this.temp2.subVectors(actor.rig.root.position, other.rig.root.position).setY(0).normalize().multiplyScalar((minimumSpacing - distance) * 1.1));
+      const minimumSpacing = other.team === actor.team ? friendlySpacing : 1.02;
+      if (distance < 0.001) {
+        force.x += actor.id.localeCompare(other.id) > 0 ? minimumSpacing : -minimumSpacing;
+      } else if (distance < minimumSpacing) {
+        force.add(this.temp2.subVectors(actor.rig.root.position, other.rig.root.position).setY(0).normalize().multiplyScalar((minimumSpacing - distance) * 1.7));
       }
     }
     return force;

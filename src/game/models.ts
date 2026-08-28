@@ -437,7 +437,8 @@ export class KnightRig {
       if (!(object instanceof THREE.Mesh)) return;
       object.castShadow = true;
       object.receiveShadow = true;
-      object.frustumCulled = true;
+      // Animated skinned bounds can lag behind a running pose and briefly cull the whole unit.
+      object.frustumCulled = false;
       const face = object.name === 'Knight_Head';
       object.material = Array.isArray(object.material)
         ? object.material.map((material) => cloneMaterial(material, face))

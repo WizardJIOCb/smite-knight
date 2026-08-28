@@ -75,6 +75,15 @@ const game = new SiegeGame(canvas, {
     element('#next-level-name').textContent = next ? `${next.operation} · ${next.title}` : '';
     ending.classList.add('active');
   },
+  onDefeat: (stats) => {
+    hud.classList.add('hidden');
+    mobileControls.classList.remove('game-active');
+    element('#ending-eyebrow').textContent = 'НАША ЦИТАДЕЛЬ ПАЛА';
+    element('#ending-title').textContent = 'Красный фронт прорвался';
+    element('#ending-stats').innerHTML = `Врагов повержено: <b>${stats.kills}</b><br>Нанесено урона: <b>${Math.round(stats.damage)}</b><br>Время обороны: <b>${formatTime(stats.duration)}</b>`;
+    element<HTMLButtonElement>('#next-level').classList.add('hidden');
+    ending.classList.add('active');
+  },
   onDamage: (strength) => {
     damageVignette.style.opacity = String(Math.min(0.9, strength));
     window.clearTimeout(damageTimer);
@@ -286,11 +295,12 @@ function renderLevelUi(): void {
   document.querySelector<HTMLMetaElement>('meta[name="description"]')?.setAttribute('content', `${currentLevel.title}: ${currentLevel.cardLine}`);
   document.documentElement.style.setProperty('--ember', colorHex(currentLevel.theme.accent));
   element('.subtitle').textContent = 'FIVE CROWNS';
-  element('.pitch').innerHTML = 'Пять крепостей. Пять правителей. Один легион.<br />Проходи кампанию подряд или выбирай любую карту.';
+  element('.pitch').innerHTML = 'Пять крепостей и одна Великая война.<br />Проходи кампанию подряд или выбирай любой фронт.';
   element('#campaign-continue').textContent = `${campaign.completed.length}/5 завершено · продолжить: ${getLevel(nextCampaignLevel(campaign)).title}`;
   element('#mission-number').textContent = currentLevel.operation;
   element('#briefing-title').textContent = currentLevel.title;
   element('#briefing-copy').textContent = currentLevel.briefing;
+  element('#deploy span').textContent = currentLevel.mode === 'citadel-war' ? 'Шесть фронтов ждут командира' : 'Пусть пепел запомнит имя';
   const objectives = element('#mission-objectives');
   objectives.replaceChildren(...currentLevel.objectives.map((objective, index) => {
     const item = document.createElement('div');
@@ -324,10 +334,16 @@ function createLevelCard(level: LevelDefinition): HTMLButtonElement {
   copy.textContent = level.cardLine;
   const boss = document.createElement('span');
   boss.className = 'boss-line';
-  boss.textContent = `${level.boss.title} · ${level.boss.name}`;
+  boss.textContent = level.mode === 'citadel-war'
+    ? '6 троп · волны пехоты, стрелков и тяжёлых бойцов'
+    : `${level.boss.title} · ${level.boss.name}`;
   const completion = document.createElement('span');
   completion.className = 'completion';
-  completion.textContent = campaign.completed.includes(level.id) ? 'Пройдено' : level.id === currentLevel.id ? 'Выбрано' : 'Играть';
+  completion.textContent = level.id === currentLevel.id
+    ? 'Выбрано'
+    : level.mode === 'citadel-war'
+      ? 'Большая битва'
+      : campaign.completed.includes(level.id) ? 'Пройдено' : 'Играть';
   card.append(operation, title, copy, boss, completion);
   card.addEventListener('click', () => navigateToLevel(level.id));
   return card;
@@ -346,6 +362,17 @@ function updateHud(state: HudState): void {
   element('#objective-fill').style.width = `${state.progress}%`;
   element('#ally-count').textContent = String(state.allies);
   element('#enemy-count').textContent = String(state.enemies);
+  const citadelScore = element('#citadel-score');
+  const isCitadelWar = state.allyCitadelHealth !== undefined && state.enemyCitadelHealth !== undefined;
+  citadelScore.classList.toggle('hidden', !isCitadelWar);
+  if (isCitadelWar) {
+    const maximum = currentLevel.boss.health;
+    element('#ally-citadel-health').textContent = String(Math.ceil(state.allyCitadelHealth ?? maximum));
+    element('#enemy-citadel-health').textContent = String(Math.ceil(state.enemyCitadelHealth ?? maximum));
+    element<HTMLElement>('#ally-citadel-fill').style.width = `${(state.allyCitadelHealth ?? maximum) / maximum * 100}%`;
+    element<HTMLElement>('#enemy-citadel-fill').style.width = `${(state.enemyCitadelHealth ?? maximum) / maximum * 100}%`;
+    element('#citadel-wave').textContent = `ВОЛНА ${state.citadelWave ?? 1}`;
+  }
   interaction.classList.toggle('hidden', !state.interaction);
 }
 

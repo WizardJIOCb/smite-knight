@@ -1,6 +1,7 @@
-export type LevelId = 'ashen-gate' | 'frostbound-pass' | 'verdant-ruins' | 'sunken-foundry' | 'eclipse-citadel';
+export type LevelId = 'ashen-gate' | 'frostbound-pass' | 'verdant-ruins' | 'sunken-foundry' | 'eclipse-citadel' | 'twin-citadels';
 export type LevelEnvironment = 'ash' | 'frost' | 'verdant' | 'foundry' | 'eclipse';
 export type BossAbility = 'ember-roar' | 'frost-nova' | 'thorn-call' | 'magma-quake' | 'void-step';
+export type LevelMode = 'siege' | 'citadel-war';
 
 export interface LevelObjective {
   title: string;
@@ -41,6 +42,7 @@ export interface BossDefinition {
 
 export interface LevelDefinition {
   id: LevelId;
+  mode?: LevelMode;
   order: number;
   seed: number;
   environment: LevelEnvironment;
@@ -138,12 +140,30 @@ export const LEVELS: readonly LevelDefinition[] = [
     endingEyebrow: 'ПЯТАЯ КОРОНА РАЗБИТА', endingTitle: 'Рассвет над цитаделью',
     theme: { background: 0x100d24, fog: 0x251849, fogDensity: 0.02, sky: 0x8c75c2, groundLight: 0x110d22, sun: 0xbc9bff, ground: 0x38334e, stone: 0x5b5572, darkStone: 0x29233f, paleStone: 0x817a9b, wood: 0x332842, rock: 0x504965, mountain: 0x17122e, moon: 0xc7a8ff, accent: 0xa866ff, hazard: 0x9b48ff },
   },
+  {
+    id: 'twin-citadels', mode: 'citadel-war', order: 6, seed: 0x7c1ade, environment: 'ash', operation: 'РЕЖИМ · ВЕЛИКАЯ ВОЙНА',
+    title: 'Война двух цитаделей', subtitle: 'TWIN CITADELS', cardLine: 'Два огромных замка, шесть троп и непрерывные волны армий.',
+    briefing: 'Две цитадели стоят друг напротив друга, а между ними пролегают шесть фронтов. Выбирай тропу, поддерживай разные отряды и сокруши вражескую крепость раньше, чем падёт наша.',
+    objectives: [
+      { title: 'Удерживать шесть троп', text: 'На каждой тропе одновременно сходятся союзные и вражеские отряды.' },
+      { title: 'Поддерживать волны', text: 'Пехота держит строй, стрелки давят издали, а тяжёлые бойцы ломают оборону.' },
+      { title: 'Разрушить цитадель', text: 'Прорвись к любым воротам и атакуй замок вместе со своей армией.' },
+    ],
+    phaseNames: ['I · РАЗВЁРТЫВАНИЕ', 'II · ДАВЛЕНИЕ', 'III · ПРОЛОМ', 'IV · ПОСЛЕДНИЙ ШТУРМ'],
+    boss: { name: 'Красный бастион', title: 'Вражеская цитадель', abilityName: 'Великая война', ability: 'ember-roar', health: 7000, speed: 0, attackRange: 0, damage: 0, abilityCooldown: 99, color: 0xff4b3d },
+    enemyCount: 0, allyCount: 0, playerHealth: 240, playerDamage: 46, artilleryDelay: [99, 99],
+    endingEyebrow: 'КРАСНЫЙ БАСТИОН РУХНУЛ', endingTitle: 'Шесть дорог ведут домой',
+    theme: { background: 0x182638, fog: 0x43566a, fogDensity: 0.009, sky: 0xa9c9e4, groundLight: 0x263a2c, sun: 0xffdfb3, ground: 0x56634b, stone: 0x69798b, darkStone: 0x303c4e, paleStone: 0xa9b8c2, wood: 0x55402b, rock: 0x4d574d, mountain: 0x253547, moon: 0xe5efff, accent: 0x59bfff, hazard: 0xff4b3d },
+  },
 ] as const;
+
+export const CAMPAIGN_LEVELS: readonly LevelDefinition[] = LEVELS.filter((level) => level.mode !== 'citadel-war');
 
 export function getLevel(id: string | null | undefined): LevelDefinition {
   return LEVELS.find((level) => level.id === id) ?? LEVELS[0];
 }
 
 export function getNextLevel(level: LevelDefinition): LevelDefinition | undefined {
-  return LEVELS[level.order];
+  const index = CAMPAIGN_LEVELS.findIndex((candidate) => candidate.id === level.id);
+  return index < 0 ? undefined : CAMPAIGN_LEVELS[index + 1];
 }

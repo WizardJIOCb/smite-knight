@@ -17,9 +17,16 @@ describe('campaign progress', () => {
   });
 
   it('discards unknown or malformed saved values', () => {
-    expect(normalizeCampaignProgress({ completed: ['ashen-gate', 'unknown'], selected: 'unknown' })).toEqual({
+    expect(normalizeCampaignProgress({ completed: ['ashen-gate', 'twin-citadels', 'unknown'], selected: 'unknown' })).toEqual({
       completed: ['ashen-gate'],
       selected: 'ashen-gate',
     });
+  });
+
+  it('keeps the citadel war selectable without adding it to campaign completion', () => {
+    const progress = completeCampaignLevel(defaultCampaignProgress(), 'twin-citadels');
+    expect(progress.completed).toEqual([]);
+    expect(progress.selected).toBe('twin-citadels');
+    expect(normalizeCampaignProgress(progress).selected).toBe('twin-citadels');
   });
 });

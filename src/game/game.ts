@@ -6,6 +6,20 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import type { NetworkPlayer } from '../../shared/protocol';
 import { BattleAudio } from './audio';
 import {
+  CITADEL_CASTLE_Z,
+  CITADEL_FRONT_Z,
+  CITADEL_LANE_COUNT,
+  CITADEL_MAX_HEALTH,
+  CITADEL_SPAWN_Z,
+  CITADEL_UNIT_CAP,
+  citadelBattlePhase,
+  citadelLaneAdvance,
+  citadelLaneGate,
+  citadelLanePoint,
+  citadelWaveSquad,
+  damageCitadel,
+} from './citadelWar';
+import {
   attackPhaseAt,
   bladeSweepAngle,
   heldAttackShouldStart,
@@ -51,6 +65,9 @@ export interface HudState {
   allies: number;
   enemies: number;
   interaction: boolean;
+  allyCitadelHealth?: number;
+  enemyCitadelHealth?: number;
+  citadelWave?: number;
 }
 
 export interface GameStats {
@@ -64,6 +81,7 @@ export interface GameEvents {
   onFeed: (message: string) => void;
   onPause: () => void;
   onVictory: (stats: GameStats) => void;
+  onDefeat: (stats: GameStats) => void;
   onDamage: (strength: number) => void;
   onNetworkState: (state: Omit<NetworkPlayer, 'id' | 'name'>) => void;
   onBattleEvent: (type: 'gate-hit' | 'phase', value: number) => void;
@@ -95,6 +113,8 @@ interface Actor {
   decisionTimer: number;
   strafe: number;
   lastAttacker?: Actor;
+  citadelLane?: number;
+  citadelUnit?: boolean;
 }
 
 interface Projectile {
@@ -178,6 +198,7 @@ export class SiegeGame {
   private readonly camera = new THREE.PerspectiveCamera(58, 1, 0.08, 180);
   private readonly clock = new THREE.Clock();
   private readonly random: () => number;
+  private readonly isCitadelWar: boolean;
   private readonly keys = new Set<string>();
   private readonly actors: Actor[] = [];
   private readonly projectiles: Projectile[] = [];
@@ -211,6 +232,14 @@ export class SiegeGame {
   private damageDone = 0;
   private ramStrikeTimer = 0;
   private ramVelocityZ = 0;
+  private allyCitadelHealth = CITADEL_MAX_HEALTH;
+  private enemyCitadelHealth = CITADEL_MAX_HEALTH;
+  private allyCitadelCore!: THREE.Mesh;
+  private enemyCitadelCore!: THREE.Mesh;
+  private citadelWave = 1;
+  private citadelLaneCursor = 0;
+  private citadelWaveTimer = 0;
+  private citadelBattleEnded = false;
   private fireballTimer = 2.5;
   private bossAbilityTimer = 5;
   private hazardDamageTimer = 0;
@@ -231,6 +260,7 @@ export class SiegeGame {
     this.canvas = canvas;
     this.events = events;
     this.level = level;
+    this.isCitadelWar = level.mode === 'citadel-war';
     this.random = seededRandom(level.seed);
     this.fireballTimer = level.artilleryDelay[0];
     this.bossAbilityTimer = level.boss.abilityCooldown;
@@ -294,10 +324,16 @@ export class SiegeGame {
     this.jumpTimer = 0;
     this.jumpTrailTimer = 0;
     this.ramVelocityZ = 0;
+    this.allyCitadelHealth = CITADEL_MAX_HEALTH;
+    this.enemyCitadelHealth = CITADEL_MAX_HEALTH;
+    this.citadelWave = 1;
+    this.citadelLaneCursor = 0;
+    this.citadelWaveTimer = 0;
+    this.citadelBattleEnded = false;
     this.fireballTimer = this.level.artilleryDelay[0];
     this.bossAbilityTimer = this.level.boss.abilityCooldown;
     this.hazardDamageTimer = 0;
-    this.ram.position.set(0, 0, 15);
+    this.ram.position.set(0, 0, this.isCitadelWar ? CITADEL_SPAWN_Z : 15);
     this.gateLeft.rotation.y = 0;
     this.gateRight.rotation.y = 0;
     this.gateLeft.visible = true;
@@ -365,6 +401,7 @@ export class SiegeGame {
   }
 
   applyNetworkBattleEvent(type: 'gate-hit' | 'phase', value: number): void {
+    if (this.isCitadelWar) return;
     if (type === 'gate-hit') this.gateHealth = Math.min(this.gateHealth, value);
     else {
       const previousPhase = this.phase;
@@ -399,21 +436,151 @@ export class SiegeGame {
     groundTexture.repeat.set(22, 30);
     groundTexture.colorSpace = THREE.SRGBColorSpace;
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(150, 190, 64, 80),
+      new THREE.PlaneGeometry(this.isCitadelWar ? 190 : 150, this.isCitadelWar ? 180 : 190, 64, 80),
       new THREE.MeshStandardMaterial({ map: groundTexture, bumpMap: groundTexture, bumpScale: 0.09, color: theme.ground, roughness: 1, metalness: 0 }),
     );
     ground.rotation.x = -Math.PI / 2;
-    ground.position.set(0, -0.03, -20);
+    ground.position.set(0, -0.03, this.isCitadelWar ? 0 : -20);
     ground.receiveShadow = true;
     this.scene.add(ground);
 
-    this.buildCastle();
-    this.buildBattlefield();
-    this.buildLevelEnvironment();
-    mountGeneratedLevelProps(this.scene, this.level.environment, castleGroundHeight);
+    if (this.isCitadelWar) this.buildCitadelWarArena();
+    else {
+      this.buildCastle();
+      this.buildBattlefield();
+      this.buildLevelEnvironment();
+      mountGeneratedLevelProps(this.scene, this.level.environment, castleGroundHeight);
+    }
     this.buildSkyline();
-    this.camera.position.set(19, 10, 46);
-    this.camera.lookAt(0, 5, -24);
+    this.camera.position.set(this.isCitadelWar ? 32 : 19, this.isCitadelWar ? 18 : 10, this.isCitadelWar ? 72 : 46);
+    this.camera.lookAt(0, this.isCitadelWar ? 3 : 5, this.isCitadelWar ? 0 : -24);
+  }
+
+  private buildCitadelWarArena(): void {
+    const pathMaterial = new THREE.MeshStandardMaterial({ color: 0x85745b, roughness: 0.98, metalness: 0 });
+    const laneGlow = new THREE.MeshStandardMaterial({ color: 0x334c63, emissive: this.level.theme.accent, emissiveIntensity: 0.42, roughness: 0.55 });
+    for (let lane = 0; lane < CITADEL_LANE_COUNT; lane += 1) {
+      let previous = citadelLanePoint(lane, -CITADEL_FRONT_Z);
+      for (let step = 1; step <= 22; step += 1) {
+        const z = -CITADEL_FRONT_Z + step / 22 * CITADEL_FRONT_Z * 2;
+        const next = citadelLanePoint(lane, z);
+        const dx = next.x - previous.x;
+        const dz = next.z - previous.z;
+        const length = Math.hypot(dx, dz);
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.1, length + 0.16), pathMaterial);
+        strip.position.set((previous.x + next.x) * 0.5, 0.02, (previous.z + next.z) * 0.5);
+        strip.rotation.y = Math.atan2(dx, dz);
+        strip.receiveShadow = true;
+        this.scene.add(strip);
+        previous = next;
+      }
+      for (const z of [-44, -20, 20, 44]) {
+        const point = citadelLanePoint(lane, z);
+        const marker = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.42, 1.4, 8), laneGlow);
+        marker.position.set(point.x, 0.7, point.z);
+        marker.castShadow = true;
+        this.scene.add(marker);
+      }
+    }
+
+    this.allyCitadelCore = this.createCitadelCastle('allies', CITADEL_CASTLE_Z, 0);
+    this.enemyCitadelCore = this.createCitadelCastle('enemies', -CITADEL_CASTLE_Z, Math.PI);
+
+    const rockMaterial = new THREE.MeshStandardMaterial({ color: this.level.theme.rock, roughness: 1, flatShading: true });
+    for (let index = 0; index < 38; index += 1) {
+      const x = (this.random() - 0.5) * 124;
+      const z = (this.random() - 0.5) * 112;
+      const nearestLane = Math.min(...Array.from({ length: CITADEL_LANE_COUNT }, (_, lane) => Math.abs(x - citadelLanePoint(lane, z).x)));
+      if (nearestLane < 4.6) continue;
+      const radius = 0.45 + this.random() * 1.15;
+      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(radius, 0), rockMaterial);
+      rock.position.set(x, radius * 0.45, z);
+      rock.scale.y = 0.55 + this.random() * 0.7;
+      rock.rotation.set(this.random(), this.random() * Math.PI, this.random());
+      rock.castShadow = rock.receiveShadow = true;
+      this.scene.add(rock);
+    }
+
+    this.ram = new THREE.Group();
+    this.ram.visible = false;
+    this.ram.position.set(0, 0, CITADEL_SPAWN_Z);
+    this.ramHead = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshBasicMaterial());
+    this.ram.add(this.ramHead);
+    this.scene.add(this.ram);
+    this.gateGroup = new THREE.Group();
+    this.gateLeft = new THREE.Group();
+    this.gateRight = new THREE.Group();
+    this.gateGroup.add(this.gateLeft, this.gateRight);
+    this.scene.add(this.gateGroup);
+    this.banner = this.createBanner(this.level.theme.accent, this.level.theme.paleStone, true);
+    this.banner.position.set(0, 0, CITADEL_SPAWN_Z - 5);
+    this.scene.add(this.banner);
+  }
+
+  private createCitadelCastle(team: Team, z: number, rotation: number): THREE.Mesh {
+    const group = new THREE.Group();
+    group.position.z = z;
+    group.rotation.y = rotation;
+    group.name = `citadel-${team}`;
+    const teamColor = team === 'allies' ? 0x51b9ff : 0xff4b3d;
+    const stone = new THREE.MeshStandardMaterial({ color: team === 'allies' ? 0x566f85 : 0x715052, roughness: 0.88, metalness: 0.08 });
+    const dark = new THREE.MeshStandardMaterial({ color: team === 'allies' ? 0x26384c : 0x48282d, roughness: 0.91 });
+    const roof = new THREE.MeshStandardMaterial({ color: team === 'allies' ? 0x1b2d43 : 0x3a171d, metalness: 0.58, roughness: 0.46 });
+    const glow = new THREE.MeshStandardMaterial({ color: teamColor, emissive: teamColor, emissiveIntensity: 1.8, metalness: 0.28, roughness: 0.24 });
+    const addBox = (width: number, height: number, depth: number, x: number, y: number, localZ: number, material: THREE.Material): THREE.Mesh => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), material);
+      mesh.position.set(x, y, localZ);
+      mesh.castShadow = mesh.receiveShadow = true;
+      group.add(mesh);
+      return mesh;
+    };
+
+    const gateCenters = Array.from({ length: CITADEL_LANE_COUNT }, (_, lane) => citadelLanePoint(lane, CITADEL_FRONT_Z).x);
+    let wallCursor = -61;
+    for (const center of gateCenters) {
+      const start = center - 3.25;
+      if (start > wallCursor) addBox(start - wallCursor, 10, 4.2, (start + wallCursor) * 0.5, 5, -10, stone);
+      wallCursor = center + 3.25;
+      for (const side of [-1, 1]) addBox(1.15, 12.5, 5.2, center + side * 3.5, 6.25, -10, dark);
+      const arch = new THREE.Mesh(new THREE.TorusGeometry(3.05, 0.52, 7, 18, Math.PI), stone);
+      arch.position.set(center, 5.2, -12.15);
+      arch.castShadow = true;
+      group.add(arch);
+      const ward = new THREE.Mesh(new THREE.PlaneGeometry(5.5, 7.2), new THREE.MeshBasicMaterial({ color: teamColor, transparent: true, opacity: 0.12, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
+      ward.position.set(center, 3.6, -12.18);
+      group.add(ward);
+    }
+    if (wallCursor < 61) addBox(61 - wallCursor, 10, 4.2, (61 + wallCursor) * 0.5, 5, -10, stone);
+
+    for (const x of [-58, -34, 0, 34, 58]) {
+      const tower = new THREE.Mesh(new THREE.CylinderGeometry(4.1, 4.8, 16, 12), dark);
+      tower.position.set(x, 8, -5.5);
+      tower.castShadow = tower.receiveShadow = true;
+      group.add(tower);
+      const cap = new THREE.Mesh(new THREE.ConeGeometry(4.8, 5.5, 12), roof);
+      cap.position.set(x, 18.5, -5.5);
+      cap.castShadow = true;
+      group.add(cap);
+    }
+
+    addBox(34, 23, 20, 0, 11.5, 9, dark);
+    addBox(25, 16, 22, -43, 8, 7, stone);
+    addBox(25, 16, 22, 43, 8, 7, stone);
+    for (const x of [-49, -37, -12, -6, 0, 6, 12, 37, 49]) addBox(2.4, 2.2, 2.4, x, x > 20 || x < -20 ? 17.1 : 24.1, x > 20 || x < -20 ? -1 : 0, stone);
+
+    const core = new THREE.Mesh(new THREE.OctahedronGeometry(3.2, 1), glow);
+    core.position.set(0, 17, 4);
+    core.castShadow = true;
+    core.name = `citadel-core-${team}`;
+    group.add(core);
+    for (const x of [-45, -27, -9, 9, 27, 45]) {
+      const banner = this.createBanner(teamColor, this.level.theme.paleStone, false);
+      banner.position.set(x, 12.8, -8.2);
+      banner.scale.setScalar(0.72);
+      group.add(banner);
+    }
+    this.scene.add(group);
+    return core;
   }
 
   private buildCastle(): void {
@@ -1143,6 +1310,10 @@ export class SiegeGame {
   }
 
   private spawnBattle(): void {
+    if (this.isCitadelWar) {
+      this.spawnCitadelWarBattle();
+      return;
+    }
     this.player = this.createActor('player', 'allies', this.level.playerHealth, 4.9, 3.1, this.level.playerDamage);
     this.player.rig.root.position.copy(PLAYER_START);
     this.player.rig.setGroundHeight(0);
@@ -1201,6 +1372,53 @@ export class SiegeGame {
     this.boss.dead = false;
     this.decorateBoss();
     this.emitHud(true);
+  }
+
+  private spawnCitadelWarBattle(): void {
+    this.player = this.createActor('player', 'allies', this.level.playerHealth, 5.25, 3.1, this.level.playerDamage);
+    this.player.rig.root.position.set(0, 0, CITADEL_SPAWN_Z + 5);
+    this.player.rig.setGroundHeight(0);
+
+    const boss = this.level.boss;
+    this.boss = this.createActor('boss', 'enemies', boss.health, 0, 0, 0);
+    this.boss.dead = true;
+    this.boss.action = 'dead';
+    this.boss.rig.root.visible = false;
+
+    for (let lane = 0; lane < CITADEL_LANE_COUNT; lane += 1) {
+      this.spawnCitadelSquad('allies', lane, 1);
+      this.spawnCitadelSquad('enemies', lane, 1);
+    }
+    this.citadelWave = 2;
+    this.citadelLaneCursor = 0;
+    this.citadelWaveTimer = 5;
+    this.phase = 0;
+    this.events.onFeed('<b>Шесть фронтов открыты.</b> Первая волна вышла из обеих цитаделей.');
+    this.emitHud(true);
+  }
+
+  private spawnCitadelSquad(team: Team, lane: number, wave: number): void {
+    const roles = citadelWaveSquad(wave, lane);
+    const direction = team === 'allies' ? 1 : -1;
+    roles.forEach((role, index) => {
+      const veteranBonus = Math.min(50, wave * 2.2);
+      const actor = this.createActor(
+        role,
+        team,
+        (role === 'brute' ? 182 : role === 'archer' ? 82 : 112) + veteranBonus,
+        role === 'brute' ? 3.22 : role === 'archer' ? 3.45 : 3.88,
+        role === 'archer' ? 15.5 : role === 'brute' ? 2.9 : 2.45,
+        (role === 'brute' ? 32 : role === 'archer' ? 15 : 20) + Math.min(12, wave * 0.5),
+      );
+      const z = direction * (CITADEL_SPAWN_Z + index * 1.55);
+      const point = citadelLanePoint(lane, z);
+      actor.rig.root.position.set(point.x + (index - 1) * 0.72, 0, z);
+      actor.rig.root.rotation.y = team === 'allies' ? Math.PI : 0;
+      actor.rig.setGroundHeight(0);
+      actor.citadelLane = lane;
+      actor.citadelUnit = true;
+      actor.cooldown = 0.15 + index * 0.16;
+    });
   }
 
   private decorateBoss(): void {
@@ -1356,6 +1574,15 @@ export class SiegeGame {
   };
 
   private updatePreview(time: number, delta: number): void {
+    if (this.isCitadelWar) {
+      const orbit = time * 0.028;
+      const targetPosition = new THREE.Vector3(Math.sin(orbit) * 58, 28 + Math.sin(time * 0.13) * 3, Math.cos(orbit) * 76);
+      this.camera.position.lerp(targetPosition, 1 - Math.exp(-1.2 * delta));
+      this.camera.lookAt(0, 3.5, 0);
+      for (const actor of this.actors) actor.rig.update(time, delta);
+      this.updateParticles(delta);
+      return;
+    }
     const orbit = time * 0.045;
     const targetPosition = new THREE.Vector3(Math.sin(orbit) * 23, 8.5 + Math.sin(time * 0.17) * 1.5, 34 + Math.cos(orbit) * 10);
     this.camera.position.lerp(targetPosition, 1 - Math.exp(-1.4 * delta));
@@ -1417,7 +1644,7 @@ export class SiegeGame {
       this.resolveRamCollision(this.player.rig.root.position);
       this.damageJumpObstacles();
       this.player.rig.setVerticalOffset(Math.sin(progress * Math.PI) * 0.66);
-      this.player.rig.setGroundHeight(castleGroundHeight(this.player.rig.root.position.x, this.player.rig.root.position.z));
+      this.player.rig.setGroundHeight(this.groundHeightAt(this.player.rig.root.position.x, this.player.rig.root.position.z));
       this.player.rig.root.rotation.y = dampAngle(
         this.player.rig.root.rotation.y,
         Math.atan2(this.jumpDirection.x, this.jumpDirection.z),
@@ -1433,7 +1660,7 @@ export class SiegeGame {
       this.jumpTimer = Math.max(0, this.jumpTimer - delta);
       if (this.jumpTimer <= 0) {
         this.player.rig.setVerticalOffset(0);
-        this.player.rig.setGroundHeight(castleGroundHeight(this.player.rig.root.position.x, this.player.rig.root.position.z));
+        this.player.rig.setGroundHeight(this.groundHeightAt(this.player.rig.root.position.x, this.player.rig.root.position.z));
         this.player.action = 'idle';
       }
       this.player.rig.setState(this.player.action, 1.35, delta);
@@ -1458,6 +1685,10 @@ export class SiegeGame {
   }
 
   private updateObjectives(delta: number): void {
+    if (this.isCitadelWar) {
+      this.updateCitadelWar(delta);
+      return;
+    }
     this.ramVelocityZ = 0;
     if (this.phase === 0) {
       const playerNear = distanceXZ(this.player.rig.root.position, this.ram.position) < 16;
@@ -1509,6 +1740,47 @@ export class SiegeGame {
       const [minimum, maximum] = this.level.artilleryDelay;
       this.fireballTimer = minimum + this.random() * (maximum - minimum);
       this.launchFireball();
+    }
+  }
+
+  private updateCitadelWar(delta: number): void {
+    for (let index = this.actors.length - 1; index >= 0; index -= 1) {
+      const actor = this.actors[index];
+      if (actor === this.player || actor === this.boss || !actor.dead || actor.actionTime < 10) continue;
+      this.scene.remove(actor.rig.root);
+      this.actors.splice(index, 1);
+    }
+    if (this.citadelBattleEnded) return;
+
+    this.citadelWaveTimer -= delta;
+    if (this.citadelWaveTimer <= 0) {
+      const livingArmySize = this.actors.filter((actor) => actor.citadelUnit && !actor.dead).length;
+      if (livingArmySize >= CITADEL_UNIT_CAP) {
+        this.citadelWaveTimer = 2;
+      } else {
+        const lane = this.citadelLaneCursor;
+        this.spawnCitadelSquad('allies', lane, this.citadelWave);
+        this.spawnCitadelSquad('enemies', lane, this.citadelWave);
+        this.citadelLaneCursor = (this.citadelLaneCursor + 1) % CITADEL_LANE_COUNT;
+        this.citadelWaveTimer = 3.4;
+        if (this.citadelLaneCursor === 0) {
+          this.events.onFeed(`<b>Волна ${this.citadelWave} вышла.</b> Все шесть троп получили подкрепление.`);
+          this.audio.horn();
+          this.citadelWave += 1;
+        }
+      }
+    }
+
+    const nextPhase = citadelBattlePhase(this.enemyCitadelHealth);
+    if (nextPhase > this.phase) {
+      this.phase = nextPhase;
+      const message = nextPhase === 1
+        ? 'Вражеская цитадель под давлением.'
+        : nextPhase === 2
+          ? 'Стены бастиона трещат.'
+          : 'Последний штурм: добейте красную цитадель!';
+      this.events.onFeed(`<b>${message}</b>`);
+      this.audio.horn();
     }
   }
 
@@ -1615,7 +1887,14 @@ export class SiegeGame {
       }
       const target = actor.target;
       let moving = false;
-      if (target && !target.dead) {
+      const assaultingCitadel = (!target || target.dead) && this.isAtEnemyCitadel(actor);
+      if (assaultingCitadel) {
+        const gate = citadelLaneGate(actor.citadelLane ?? 0, actor.team === 'allies' ? 'enemies' : 'allies');
+        const direction = this.temp.set(gate.x - actor.rig.root.position.x, 0, gate.z - actor.rig.root.position.z);
+        if (direction.lengthSq() > 0.01) actor.rig.root.rotation.y = dampAngle(actor.rig.root.rotation.y, Math.atan2(direction.x, direction.z), 10, delta);
+        if (actor.cooldown <= 0 && actor.action !== 'attack') this.startActorAttack(actor);
+        else if (actor.action !== 'attack') actor.action = 'idle';
+      } else if (target && !target.dead) {
         const distance = distanceXZ(actor.rig.root.position, target.rig.root.position);
         const desiredRange = actor.role === 'archer' ? 11.5 : actor.role === 'brute' ? 2.4 : actor.attackRange * 0.78;
         const direction = this.temp.subVectors(target.rig.root.position, actor.rig.root.position);
@@ -1630,16 +1909,7 @@ export class SiegeGame {
           actor.rig.root.position.addScaledVector(direction, actor.speed * delta);
           moving = true;
           actor.action = 'run';
-        } else if (actor.cooldown <= 0 && actor.action !== 'attack') {
-          actor.action = 'attack';
-          actor.actionTime = 0;
-          actor.hitDone = false;
-          actor.swingStarted = false;
-          actor.attackTrailTimer = 0;
-          actor.trailSweepAngle = undefined;
-          actor.cooldown = actor.role === 'boss' ? 0.86 : actor.role === 'brute' ? 1.35 : actor.role === 'archer' ? 1.9 + this.random() : 1.1 + this.random() * 0.45;
-          if (actor.role === 'archer') this.audio.bow();
-        }
+        } else if (actor.cooldown <= 0 && actor.action !== 'attack') this.startActorAttack(actor);
       } else {
         const destination = this.getActorDestination(actor);
         const direction = this.temp.subVectors(destination, actor.rig.root.position);
@@ -1667,7 +1937,8 @@ export class SiegeGame {
         if (actor.role === 'archer') {
           if (!actor.hitDone && actor.actionTime >= 0.52) {
             actor.hitDone = true;
-            this.fireArrow(actor);
+            if (this.isAtEnemyCitadel(actor)) this.damageCitadelFromActor(actor, 0.82);
+            else this.fireArrow(actor);
           }
           if (actor.actionTime >= 0.78) actor.action = 'idle';
         } else {
@@ -1687,14 +1958,26 @@ export class SiegeGame {
     this.player.rig.update(time, delta);
   }
 
+  private startActorAttack(actor: Actor): void {
+    actor.action = 'attack';
+    actor.actionTime = 0;
+    actor.hitDone = false;
+    actor.swingStarted = false;
+    actor.attackTrailTimer = 0;
+    actor.trailSweepAngle = undefined;
+    actor.cooldown = actor.role === 'boss' ? 0.86 : actor.role === 'brute' ? 1.35 : actor.role === 'archer' ? 1.9 + this.random() : 1.1 + this.random() * 0.45;
+    if (actor.role === 'archer') this.audio.bow();
+  }
+
   private findTarget(actor: Actor): Actor | undefined {
     let best: Actor | undefined;
     let bestDistance = actor.role === 'archer' ? 22 : 11;
-    const escortPosition = actor.team === 'allies' && this.phase < 2 ? this.getActorDestination(actor) : undefined;
+    const escortPosition = !this.isCitadelWar && actor.team === 'allies' && this.phase < 2 ? this.getActorDestination(actor) : undefined;
     for (const candidate of this.actors) {
       if (candidate.dead || candidate.team === actor.team || candidate === this.boss && this.phase < 3) continue;
+      if (this.isCitadelWar && actor.citadelUnit && candidate.citadelUnit && actor.citadelLane !== candidate.citadelLane) continue;
       if (Math.abs(candidate.rig.root.position.y - actor.rig.root.position.y) > 4.25) continue;
-      const separatedByClosedGate = this.phase < 2
+      const separatedByClosedGate = !this.isCitadelWar && this.phase < 2
         && ((actor.rig.root.position.z > -24.3 && candidate.rig.root.position.z < -29.8)
           || (actor.rig.root.position.z < -29.8 && candidate.rig.root.position.z > -24.3));
       if (separatedByClosedGate) continue;
@@ -1709,6 +1992,10 @@ export class SiegeGame {
   }
 
   private getActorDestination(actor: Actor): THREE.Vector3 {
+    if (this.isCitadelWar && actor.citadelUnit) {
+      const next = citadelLaneAdvance(actor.citadelLane ?? 0, actor.team, actor.rig.root.position.z);
+      return new THREE.Vector3(next.x, 0, next.z);
+    }
     const index = Number(actor.id.split('-').at(-1));
     const lane = (index % 5 - 2) * 1.8;
     if (actor.team === 'allies') {
@@ -1730,7 +2017,7 @@ export class SiegeGame {
 
   private computeSeparation(actor: Actor): THREE.Vector3 {
     const force = new THREE.Vector3();
-    const friendlySpacing = actor.team === 'allies' && this.phase < 2 ? 1.65 : 1.12;
+    const friendlySpacing = this.isCitadelWar ? 1.22 : actor.team === 'allies' && this.phase < 2 ? 1.65 : 1.12;
     for (const other of this.actors) {
       if (other === actor || other.dead) continue;
       if (Math.abs(actor.rig.root.position.y - other.rig.root.position.y) > 2.5) continue;
@@ -1786,6 +2073,8 @@ export class SiegeGame {
       return true;
     }
 
+    if (this.isCitadelWar && this.applyCitadelMeleeContact(actor, attacker, profile, range, delta)) return true;
+
     if (actor === this.player && this.phase === 1 && sweptBladeContact(attacker, this.gateGroup.position, actor.actionTime, profile, range, 2.35, actor.actionTime - delta)) {
       this.damageGate(3.5);
       this.spawnArmorHitEffect(new THREE.Vector3(attacker.x, position.y + 1.15, attacker.z).add(new THREE.Vector3(Math.sin(attacker.rotation), 0, Math.cos(attacker.rotation)).multiplyScalar(2.6)), true);
@@ -1820,6 +2109,63 @@ export class SiegeGame {
     this.damageDestructible(closestProp, actor.damage * (actor === this.player ? 1.18 : 0.9), impact, force);
     this.audio.hit(false);
     return true;
+  }
+
+  private applyCitadelMeleeContact(
+    actor: Actor,
+    attacker: { x: number; z: number; rotation: number },
+    profile: MeleeAttackProfile,
+    range: number,
+    delta: number,
+  ): boolean {
+    const targetTeam: Team = actor.team === 'allies' ? 'enemies' : 'allies';
+    const lanes = actor.citadelUnit && actor.citadelLane !== undefined
+      ? [actor.citadelLane]
+      : actor === this.player && actor.team === 'allies'
+        ? Array.from({ length: CITADEL_LANE_COUNT }, (_, lane) => lane)
+        : [];
+    for (const lane of lanes) {
+      const gate = citadelLaneGate(lane, targetTeam);
+      if (!sweptBladeContact(attacker, gate, actor.actionTime, profile, range, 2.4, actor.actionTime - delta)) continue;
+      this.damageCitadelFromActor(actor, actor === this.player ? 1.35 : actor.role === 'brute' ? 1.22 : 1);
+      return true;
+    }
+    return false;
+  }
+
+  private isAtEnemyCitadel(actor: Actor): boolean {
+    if (!this.isCitadelWar || !actor.citadelUnit || actor.citadelLane === undefined || actor.dead) return false;
+    const targetTeam: Team = actor.team === 'allies' ? 'enemies' : 'allies';
+    return distanceXZ(actor.rig.root.position, citadelLaneGate(actor.citadelLane, targetTeam)) < 4.5;
+  }
+
+  private damageCitadelFromActor(actor: Actor, multiplier: number): void {
+    if (this.citadelBattleEnded) return;
+    const lane = actor.citadelLane ?? Array.from({ length: CITADEL_LANE_COUNT }, (_, index) => index)
+      .reduce((best, candidate) => Math.abs(citadelLaneGate(candidate, 'enemies').x - actor.rig.root.position.x) < Math.abs(citadelLaneGate(best, 'enemies').x - actor.rig.root.position.x) ? candidate : best, 0);
+    const targetTeam: Team = actor.team === 'allies' ? 'enemies' : 'allies';
+    const gate = citadelLaneGate(lane, targetTeam);
+    const amount = actor.damage * multiplier;
+    if (targetTeam === 'enemies') this.enemyCitadelHealth = damageCitadel(this.enemyCitadelHealth, amount);
+    else this.allyCitadelHealth = damageCitadel(this.allyCitadelHealth, amount);
+    const color = targetTeam === 'enemies' ? 0xff4b3d : 0x59bfff;
+    this.spawnImpact(new THREE.Vector3(gate.x, 1.8, gate.z), color, actor.role === 'brute' ? 10 : 6);
+    if (actor === this.player) {
+      this.damageDone += amount;
+      this.cameraShake = Math.max(this.cameraShake, 0.22);
+      this.audio.hit(true);
+    }
+    if (this.enemyCitadelHealth <= 0) {
+      this.citadelBattleEnded = true;
+      this.events.onFeed('<b>Красная цитадель разрушена!</b> Все шесть фронтов наши.');
+      this.audio.explosion();
+      this.victory();
+    } else if (this.allyCitadelHealth <= 0) {
+      this.citadelBattleEnded = true;
+      this.events.onFeed('<b>Синяя цитадель пала.</b> Красная армия прорвала фронт.');
+      this.audio.explosion();
+      this.defeat();
+    }
   }
 
   private playerAttack(): void {
@@ -1985,11 +2331,13 @@ export class SiegeGame {
     this.player.action = 'idle';
     this.jumpTimer = 0;
     this.player.rig.setVerticalOffset(0);
-    const respawn = this.phase < 2
-      ? PLAYER_START
-      : this.phase === 2
-        ? new THREE.Vector3(0, 0, -31)
-        : new THREE.Vector3(0, CASTLE_LIMITS.summitHeight, CASTLE_LIMITS.secondStairEndZ - 1);
+    const respawn = this.isCitadelWar
+      ? new THREE.Vector3(0, 0, CITADEL_SPAWN_Z + 5)
+      : this.phase < 2
+        ? PLAYER_START
+        : this.phase === 2
+          ? new THREE.Vector3(0, 0, -31)
+          : new THREE.Vector3(0, CASTLE_LIMITS.summitHeight, CASTLE_LIMITS.secondStairEndZ - 1);
     this.player.rig.root.position.copy(respawn);
     this.player.rig.setGroundHeight(respawn.y);
   }
@@ -2547,6 +2895,17 @@ export class SiegeGame {
   }
 
   private updateGateVisual(delta: number): void {
+    if (this.isCitadelWar) {
+      const allyRatio = this.allyCitadelHealth / CITADEL_MAX_HEALTH;
+      const enemyRatio = this.enemyCitadelHealth / CITADEL_MAX_HEALTH;
+      for (const [core, ratio] of [[this.allyCitadelCore, allyRatio], [this.enemyCitadelCore, enemyRatio]] as [THREE.Mesh, number][]) {
+        core.rotation.y += delta * (0.45 + ratio * 0.8);
+        core.scale.setScalar(0.7 + ratio * 0.3);
+        const material = core.material as THREE.MeshStandardMaterial;
+        material.emissiveIntensity = 0.45 + ratio * 1.5;
+      }
+      return;
+    }
     const opened = smoothstep(25, 0, this.gateHealth);
     this.gateLeft.rotation.y = dampAngle(this.gateLeft.rotation.y, opened * 1.48, 3.2, delta);
     this.gateRight.rotation.y = dampAngle(this.gateRight.rotation.y, -opened * 1.48, 3.2, delta);
@@ -2576,6 +2935,11 @@ export class SiegeGame {
   }
 
   private resolveWorldCollision(position: THREE.Vector3): void {
+    if (this.isCitadelWar) {
+      position.x = clamp(position.x, -61, 61);
+      position.z = clamp(position.z, -CITADEL_FRONT_Z + 2.5, CITADEL_FRONT_Z - 2.5);
+      return;
+    }
     position.x = clamp(position.x, -41.5, 41.5);
     position.z = clamp(position.z, -74, 43);
     const atWall = position.z < -24.3 && position.z > -29.8;
@@ -2624,11 +2988,16 @@ export class SiegeGame {
   }
 
   private syncActorGround(actor: Actor, delta: number): void {
-    const targetHeight = castleGroundHeight(actor.rig.root.position.x, actor.rig.root.position.z);
+    const targetHeight = this.groundHeightAt(actor.rig.root.position.x, actor.rig.root.position.z);
     actor.rig.setGroundHeight(damp(actor.rig.root.position.y, targetHeight, 18, delta));
   }
 
+  private groundHeightAt(x: number, z: number): number {
+    return this.isCitadelWar ? 0 : castleGroundHeight(x, z);
+  }
+
   private resolveRamCollision(position: THREE.Vector3): void {
+    if (this.isCitadelWar) return;
     const localX = position.x - this.ram.position.x;
     const localZ = position.z - this.ram.position.z;
     if (Math.abs(localX) >= 2.3 || Math.abs(localZ) >= 4.6) return;
@@ -2650,6 +3019,26 @@ export class SiegeGame {
   private emitHud(force = false): void {
     if (!force && this.elapsed - this.lastHud < 0.08) return;
     this.lastHud = this.elapsed;
+    if (this.isCitadelWar) {
+      this.phase = citadelBattlePhase(this.enemyCitadelHealth);
+      const allies = this.actors.filter((actor) => actor.team === 'allies' && !actor.dead).length;
+      const enemies = this.actors.filter((actor) => actor.team === 'enemies' && !actor.dead).length;
+      this.events.onHud({
+        health: this.player.health,
+        maxHealth: this.player.maxHealth,
+        stamina: this.player.stamina,
+        phase: this.phase,
+        objective: `Волна ${this.citadelWave} · наша цитадель ${Math.ceil(this.allyCitadelHealth)} · вражеская ${Math.ceil(this.enemyCitadelHealth)}`,
+        progress: 100 - this.enemyCitadelHealth / CITADEL_MAX_HEALTH * 100,
+        allies,
+        enemies,
+        interaction: false,
+        allyCitadelHealth: this.allyCitadelHealth,
+        enemyCitadelHealth: this.enemyCitadelHealth,
+        citadelWave: this.citadelWave,
+      });
+      return;
+    }
     let objective = `Проведите таран · ${this.level.title}`;
     let progress = clamp((15 - this.ram.position.z) / 36.9 * 100, 0, 100);
     const livingAllies = this.actors.filter((actor) => actor.team === 'allies' && !actor.dead).length;
@@ -2683,9 +3072,18 @@ export class SiegeGame {
   private victory(): void {
     if (this.mode === 'victory') return;
     this.mode = 'victory';
+    this.primaryAttackHeld = false;
     if (document.pointerLockElement) document.exitPointerLock();
     this.audio.victory();
     this.events.onVictory({ kills: this.kills, duration: this.elapsed, damage: this.damageDone });
+  }
+
+  private defeat(): void {
+    if (this.mode === 'victory') return;
+    this.mode = 'victory';
+    this.primaryAttackHeld = false;
+    if (document.pointerLockElement) document.exitPointerLock();
+    this.events.onDefeat({ kills: this.kills, duration: this.elapsed, damage: this.damageDone });
   }
 
   private resize(): void {

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#090a0c" />
-    <meta name="description" content="SMITE KNIGHT — масштабный штурм крепости прямо в браузере." />
+    <meta name="description" content="SMITE KNIGHT — сюжетные осады и масштабная война двух цитаделей прямо в браузере." />
     <meta property="og:title" content="SMITE KNIGHT — Ashen Siege" />
     <meta property="og:description" content="Прорви ворота, переживи град стрел и возьми Чёрную крепость." />
     <title>SMITE KNIGHT — Ashen Siege</title>
@@ -36,8 +36,8 @@
         <div class="map-select-panel">
           <button class="close-button" data-close="maps" aria-label="Закрыть">×</button>
           <div class="eyebrow">КАРТА ВОЙНЫ</div>
-          <h2 id="map-select-title">Пять крепостей</h2>
-          <p>Проходи кампанию подряд или начинай любую операцию отдельно.</p>
+          <h2 id="map-select-title">Шесть полей боя</h2>
+          <p>Пять сюжетных крепостей и отдельная Великая война двух цитаделей.</p>
           <div id="level-grid" class="level-grid"></div>
         </div>
       </section>
@@ -75,6 +75,11 @@
         <div class="top-hud">
           <div class="objective-block"><span id="phase-label">ФАЗА I · ПОДЪЁМ</span><strong id="objective">Сопровождайте таран к воротам</strong><div class="objective-progress"><i id="objective-fill"></i></div></div>
           <div class="battle-count"><span><b id="ally-count">24</b> союзники</span><i></i><span><b id="enemy-count">38</b> враги</span></div>
+          <div id="citadel-score" class="hidden">
+            <div class="citadel-team ally"><span>СИНЯЯ ЦИТАДЕЛЬ</span><b id="ally-citadel-health">7000</b><i><em id="ally-citadel-fill"></em></i></div>
+            <strong id="citadel-wave">ВОЛНА 1</strong>
+            <div class="citadel-team enemy"><span>КРАСНАЯ ЦИТАДЕЛЬ</span><b id="enemy-citadel-health">7000</b><i><em id="enemy-citadel-fill"></em></i></div>
+          </div>
         </div>
         <div class="bars">
           <div class="crest">SK</div>

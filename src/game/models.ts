@@ -198,6 +198,7 @@ export class KnightRig {
   private activeAnimation?: THREE.AnimationAction;
   private activeClipName = '';
   private readonly detailedMaterials: THREE.MeshStandardMaterial[] = [];
+  private bossRegalia?: THREE.Group;
   private bossAura?: THREE.Mesh<THREE.TorusGeometry, THREE.MeshStandardMaterial>;
 
   constructor(team: KnightTeam, role: KnightRole = 'soldier') {
@@ -287,6 +288,7 @@ export class KnightRig {
       if (action === 'attack' || action === 'jump') this.attackClock = 0;
       if (action === 'dead') this.deathClock = 0;
       this.action = action;
+      if (this.bossRegalia) this.bossRegalia.visible = action !== 'dead';
       this.playDetailedAction(action);
     }
     this.speed = damp(this.speed, speed, 10, delta);
@@ -377,7 +379,7 @@ export class KnightRig {
     for (const material of this.detailedMaterials) {
       material.emissiveIntensity = (this.role === 'boss' ? 0.14 : 0) + (this.damageFlash > 0 ? 0.82 : 0);
     }
-    if (this.bossAura) {
+    if (this.bossAura?.visible && this.bossRegalia?.visible) {
       this.bossAura.rotation.z = time * 0.48;
       this.bossAura.material.emissiveIntensity = 1.2 + Math.sin(time * 3.4) * 0.45;
     }
@@ -406,6 +408,7 @@ export class KnightRig {
     this.bossAura.rotation.x = Math.PI / 2;
     this.bossAura.position.y = 0.06;
     regalia.add(this.bossAura);
+    this.bossRegalia = regalia;
     this.root.add(regalia);
   }
 

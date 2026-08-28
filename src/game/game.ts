@@ -7,6 +7,7 @@ import type { NetworkPlayer } from '../../shared/protocol';
 import { BattleAudio } from './audio';
 import { attackPhaseAt, bladeSweepAngle, meleeAttackProfile, sweptBladeContact, type MeleeAttackProfile } from './combat';
 import { applyDestructibleDamage, pointHitsObstacle, radialDestructibleDamage, segmentHitsObstacle } from './destruction';
+import { LEVELS, type LevelDefinition } from './levels';
 import { KnightRig, createRemoteKnight, type RigAction } from './models';
 import {
   angleDelta,
@@ -72,6 +73,7 @@ interface Actor {
   hitDone: boolean;
   swingStarted: boolean;
   attackTrailTimer: number;
+  trailSweepAngle?: number;
   dead: boolean;
   target?: Actor;
   decisionTimer: number;
@@ -94,6 +96,7 @@ interface Particle {
   velocity: THREE.Vector3;
   life: number;
   maxLife: number;
+  baseOpacity?: number;
   gravity?: number;
   drag?: number;
   growth?: number;
@@ -128,6 +131,14 @@ interface DestructibleProp {
   destroyed: boolean;
 }
 
+interface LevelHazard {
+  position: THREE.Vector3;
+  radius: number;
+  damage: number;
+  staminaDrain: number;
+  color: number;
+}
+
 interface RemoteRig {
   rig: KnightRig;
   targetPosition: THREE.Vector3;
@@ -141,6 +152,7 @@ const PLAYER_START = new THREE.Vector3(0, 0, 27);
 
 export class SiegeGame {
   readonly audio = new BattleAudio();
+  readonly level: LevelDefinition;
   private readonly canvas: HTMLCanvasElement;
   private readonly events: GameEvents;
   private readonly renderer: THREE.WebGLRenderer;
@@ -149,13 +161,14 @@ export class SiegeGame {
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(58, 1, 0.08, 180);
   private readonly clock = new THREE.Clock();
-  private readonly random = seededRandom(0x5a17e);
+  private readonly random: () => number;
   private readonly keys = new Set<string>();
   private readonly actors: Actor[] = [];
   private readonly projectiles: Projectile[] = [];
   private readonly particles: Particle[] = [];
   private readonly explosives: ExplosiveProp[] = [];
   private readonly destructibles: DestructibleProp[] = [];
+  private readonly hazards: LevelHazard[] = [];
   private readonly remotes = new Map<string, RemoteRig>();
   private readonly temp = new THREE.Vector3();
   private readonly temp2 = new THREE.Vector3();
@@ -182,6 +195,8 @@ export class SiegeGame {
   private ramStrikeTimer = 0;
   private ramVelocityZ = 0;
   private fireballTimer = 2.5;
+  private bossAbilityTimer = 5;
+  private hazardDamageTimer = 0;
   private jumpTimer = 0;
   private readonly jumpDuration = 0.38;
   private readonly jumpDirection = new THREE.Vector3(0, 0, -1);
@@ -194,9 +209,13 @@ export class SiegeGame {
   private joystick = new THREE.Vector2();
   private quality: 'high' | 'medium' | 'low' = 'high';
 
-  constructor(canvas: HTMLCanvasElement, events: GameEvents) {
+  constructor(canvas: HTMLCanvasElement, events: GameEvents, level: LevelDefinition = LEVELS[0]) {
     this.canvas = canvas;
     this.events = events;
+    this.level = level;
+    this.random = seededRandom(level.seed);
+    this.fireballTimer = level.artilleryDelay[0];
+    this.bossAbilityTimer = level.boss.abilityCooldown;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -253,6 +272,9 @@ export class SiegeGame {
     this.jumpTimer = 0;
     this.jumpTrailTimer = 0;
     this.ramVelocityZ = 0;
+    this.fireballTimer = this.level.artilleryDelay[0];
+    this.bossAbilityTimer = this.level.boss.abilityCooldown;
+    this.hazardDamageTimer = 0;
     this.ram.position.set(0, 0, 15);
     this.gateLeft.rotation.y = 0;
     this.gateRight.rotation.y = 0;
@@ -330,12 +352,13 @@ export class SiegeGame {
   }
 
   private buildWorld(): void {
-    this.scene.background = new THREE.Color(0x222a32);
-    this.scene.fog = new THREE.FogExp2(0x2c3338, 0.015);
+    const { theme } = this.level;
+    this.scene.background = new THREE.Color(theme.background);
+    this.scene.fog = new THREE.FogExp2(theme.fog, theme.fogDensity);
 
-    const hemisphere = new THREE.HemisphereLight(0xa8bdd0, 0x392317, 1.8);
+    const hemisphere = new THREE.HemisphereLight(theme.sky, theme.groundLight, 1.8);
     this.scene.add(hemisphere);
-    this.sun = new THREE.DirectionalLight(0xffd4a8, 4.15);
+    this.sun = new THREE.DirectionalLight(theme.sun, 4.15);
     this.sun.position.set(-24, 42, 21);
     this.sun.castShadow = true;
     this.sun.shadow.camera.left = -50;
@@ -353,7 +376,7 @@ export class SiegeGame {
     groundTexture.colorSpace = THREE.SRGBColorSpace;
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(150, 190, 64, 80),
-      new THREE.MeshStandardMaterial({ map: groundTexture, bumpMap: groundTexture, bumpScale: 0.09, color: 0x655e4b, roughness: 1, metalness: 0 }),
+      new THREE.MeshStandardMaterial({ map: groundTexture, bumpMap: groundTexture, bumpScale: 0.09, color: theme.ground, roughness: 1, metalness: 0 }),
     );
     ground.rotation.x = -Math.PI / 2;
     ground.position.set(0, -0.03, -20);
@@ -362,12 +385,14 @@ export class SiegeGame {
 
     this.buildCastle();
     this.buildBattlefield();
+    this.buildLevelEnvironment();
     this.buildSkyline();
     this.camera.position.set(19, 10, 46);
     this.camera.lookAt(0, 5, -24);
   }
 
   private buildCastle(): void {
+    const { theme } = this.level;
     const stoneTexture = this.createStoneTexture();
     stoneTexture.wrapS = stoneTexture.wrapT = THREE.RepeatWrapping;
     stoneTexture.repeat.set(3.5, 2.5);
@@ -376,10 +401,10 @@ export class SiegeGame {
     woodTexture.wrapS = woodTexture.wrapT = THREE.RepeatWrapping;
     woodTexture.repeat.set(2, 3);
     woodTexture.colorSpace = THREE.SRGBColorSpace;
-    const stone = new THREE.MeshStandardMaterial({ map: stoneTexture, bumpMap: stoneTexture, bumpScale: 0.12, color: 0x86837b, roughness: 0.88, metalness: 0.03 });
-    const darkStone = new THREE.MeshStandardMaterial({ map: stoneTexture, bumpMap: stoneTexture, bumpScale: 0.15, color: 0x505457, roughness: 0.93 });
-    const paleStone = new THREE.MeshStandardMaterial({ map: stoneTexture, bumpMap: stoneTexture, bumpScale: 0.1, color: 0xa19a8e, roughness: 0.86 });
-    const wood = new THREE.MeshStandardMaterial({ map: woodTexture, bumpMap: woodTexture, bumpScale: 0.09, color: 0x5a2f18, roughness: 0.84, metalness: 0.04 });
+    const stone = new THREE.MeshStandardMaterial({ map: stoneTexture, bumpMap: stoneTexture, bumpScale: 0.12, color: theme.stone, roughness: 0.88, metalness: 0.03 });
+    const darkStone = new THREE.MeshStandardMaterial({ map: stoneTexture, bumpMap: stoneTexture, bumpScale: 0.15, color: theme.darkStone, roughness: 0.93 });
+    const paleStone = new THREE.MeshStandardMaterial({ map: stoneTexture, bumpMap: stoneTexture, bumpScale: 0.1, color: theme.paleStone, roughness: 0.86 });
+    const wood = new THREE.MeshStandardMaterial({ map: woodTexture, bumpMap: woodTexture, bumpScale: 0.09, color: theme.wood, roughness: 0.84, metalness: 0.04 });
     const iron = new THREE.MeshStandardMaterial({ color: 0x242629, metalness: 0.82, roughness: 0.3 });
 
     const makeBox = (size: THREE.Vector3, position: THREE.Vector3, material: THREE.Material, cast = true): THREE.Mesh => {
@@ -495,7 +520,7 @@ export class SiegeGame {
     const keepDoor = makeBox(new THREE.Vector3(4, 6, 0.35), new THREE.Vector3(0, 9, -74.35), wood);
     keepDoor.castShadow = true;
 
-    this.banner = this.createBanner(0xa52922, 0xd6ae60, true);
+    this.banner = this.createBanner(this.level.boss.color, this.level.theme.paleStone, true);
     this.banner.position.set(0, CASTLE_LIMITS.summitHeight, -72.8);
     this.banner.rotation.z = Math.PI / 2;
     this.scene.add(this.banner);
@@ -578,7 +603,7 @@ export class SiegeGame {
   }
 
   private buildBattlefield(): void {
-    const wood = new THREE.MeshStandardMaterial({ color: 0x4a2b18, roughness: 0.94 });
+    const wood = new THREE.MeshStandardMaterial({ color: this.level.theme.wood, roughness: 0.94 });
     const iron = new THREE.MeshStandardMaterial({ color: 0x303235, metalness: 0.82, roughness: 0.36 });
     this.ram = new THREE.Group();
     this.ram.position.set(0, 0, 15);
@@ -618,7 +643,7 @@ export class SiegeGame {
       const radius = 0.18 + this.random() * 0.75;
       const rock = new THREE.Mesh(
         new THREE.DodecahedronGeometry(radius, 0),
-        new THREE.MeshStandardMaterial({ color: 0x57554d, roughness: 1 }),
+        new THREE.MeshStandardMaterial({ color: this.level.theme.rock, roughness: 1 }),
       );
       rock.position.set(x, rock.geometry.boundingSphere?.radius ?? 0.2, z);
       const heightScale = 0.45 + this.random() * 0.6;
@@ -626,7 +651,7 @@ export class SiegeGame {
       rock.rotation.set(this.random(), this.random() * Math.PI, this.random());
       rock.castShadow = rock.receiveShadow = true;
       this.scene.add(rock);
-      this.registerDestructible(rock, 'rock', 'stone', 16 + radius * 38, Math.max(0.22, radius * 0.86), radius * 2 * heightScale, 0, 0x69665e);
+      this.registerDestructible(rock, 'rock', 'stone', 16 + radius * 38, Math.max(0.22, radius * 0.86), radius * 2 * heightScale, 0, this.level.theme.rock);
     }
 
     for (let index = 0; index < 14; index += 1) {
@@ -692,10 +717,157 @@ export class SiegeGame {
     }
   }
 
+  private buildLevelEnvironment(): void {
+    const environment = this.level.environment;
+    if (environment === 'ash') {
+      for (const [x, z] of [[-18, 2], [18, -18], [-16, -45], [15, -63]] as [number, number][]) {
+        this.createEmberVent(x, z);
+      }
+      return;
+    }
+    if (environment === 'frost') {
+      for (const [x, z, scale] of [
+        [-9, 7, 1.25], [10, -4, 1], [-15, -17, 1.4], [14, -37, 1.2], [-8, -52, 0.95], [8, -67, 1.3], [-18, -70, 1.1], [17, 22, 1.5],
+      ] as [number, number, number][]) this.createCrystalCluster(x, z, scale, 0x8ce9ff);
+      for (const [x, z, radius] of [[-5, 0, 2.5], [7, -35, 2.7], [-5, -55, 2.3], [5, -69, 2.2]] as [number, number, number][]) {
+        this.createHazardPool(x, z, radius, 7, 14, 0x70d8ff);
+      }
+      return;
+    }
+    if (environment === 'verdant') {
+      for (const [x, z, scale] of [[-8, 4, 0.75], [13, -10, 0.9], [-17, -36, 0.8], [15, -51, 0.72], [-9, -64, 0.7], [10, -73, 0.64]] as [number, number, number][]) {
+        this.createBattleTree(x, z, scale);
+      }
+      for (const [x, z] of [[-5, -7], [7, -40], [-6, -59], [6, -69]] as [number, number][]) {
+        this.createHazardPool(x, z, 2.45, 10, 4, 0x6fcf3f);
+        this.createMushroomCluster(x + 2.5, z - 0.8);
+      }
+      return;
+    }
+    if (environment === 'foundry') {
+      for (const [x, z, radius] of [[-7, 4, 2.9], [8, -19, 2.7], [-7, -42, 2.6], [7, -58, 2.35], [-5, -70, 2.2]] as [number, number, number][]) {
+        this.createHazardPool(x, z, radius, 15, 0, 0xff4c17);
+      }
+      for (const [x, z] of [[-14, 1], [15, -24], [-14, -49], [13, -66]] as [number, number][]) this.createForgePylon(x, z);
+      for (const [x, z] of [[-4, -19], [5, -45], [-6, -67]] as [number, number][]) this.createExplosiveBarrel(x, z);
+      return;
+    }
+    for (const [x, z, radius] of [[-6, 2, 2.6], [7, -22, 2.8], [-7, -43, 2.45], [6, -58, 2.4], [-5, -69, 2.15]] as [number, number, number][]) {
+      this.createHazardPool(x, z, radius, 12, 10, 0xa14cff);
+    }
+    for (const [x, z, scale] of [[-12, 8, 1], [13, -12, 1.2], [-14, -38, 1.1], [13, -55, 0.9], [-9, -68, 0.86], [9, -72, 0.9]] as [number, number, number][]) {
+      this.createVoidObelisk(x, z, scale);
+    }
+  }
+
+  private createHazardPool(x: number, z: number, radius: number, damage: number, staminaDrain: number, color: number): void {
+    const y = castleGroundHeight(x, z) + 0.035;
+    const pool = new THREE.Mesh(
+      new THREE.CircleGeometry(radius, 28),
+      new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.45, transparent: true, opacity: 0.58, roughness: 0.28, side: THREE.DoubleSide }),
+    );
+    pool.rotation.x = -Math.PI / 2;
+    pool.position.set(x, y, z);
+    this.scene.add(pool);
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(radius * 0.72, radius, 28),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.18, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(x, y + 0.015, z);
+    this.scene.add(ring);
+    this.hazards.push({ position: new THREE.Vector3(x, y, z), radius, damage, staminaDrain, color });
+  }
+
+  private createCrystalCluster(x: number, z: number, scale: number, color: number): void {
+    const group = new THREE.Group();
+    const y = castleGroundHeight(x, z);
+    group.position.set(x, y, z);
+    const material = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.32, metalness: 0.18, roughness: 0.24, transparent: true, opacity: 0.88 });
+    for (const [ox, oz, height, tilt] of [[0, 0, 3.8, 0], [-0.7, 0.3, 2.7, -0.2], [0.65, 0.45, 2.3, 0.22], [0.2, -0.65, 1.9, 0.12]] as [number, number, number, number][]) {
+      const shard = new THREE.Mesh(new THREE.ConeGeometry(0.48 * scale, height * scale, 6), material);
+      shard.position.set(ox * scale, height * scale * 0.5, oz * scale);
+      shard.rotation.z = tilt;
+      shard.castShadow = true;
+      group.add(shard);
+    }
+    this.scene.add(group);
+    this.registerDestructible(group, 'rock', 'stone', 84 * scale, 1.05 * scale, 4 * scale, 1.8 * scale, color);
+  }
+
+  private createMushroomCluster(x: number, z: number): void {
+    const group = new THREE.Group();
+    group.position.set(x, castleGroundHeight(x, z), z);
+    const stemMaterial = new THREE.MeshStandardMaterial({ color: 0xd5c5a3, roughness: 0.8 });
+    const capMaterial = new THREE.MeshStandardMaterial({ color: 0x74c947, emissive: 0x3d7d22, emissiveIntensity: 0.5, roughness: 0.65 });
+    for (let index = 0; index < 6; index += 1) {
+      const height = 0.28 + this.random() * 0.55;
+      const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.065, height, 6), stemMaterial);
+      stem.position.set((this.random() - 0.5) * 1.25, height * 0.5, (this.random() - 0.5) * 1.25);
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.15 + this.random() * 0.16, 7, 4, 0, Math.PI * 2, 0, Math.PI * 0.55), capMaterial);
+      cap.position.copy(stem.position).setY(height);
+      group.add(stem, cap);
+    }
+    this.scene.add(group);
+  }
+
+  private createForgePylon(x: number, z: number): void {
+    const group = new THREE.Group();
+    group.position.set(x, castleGroundHeight(x, z), z);
+    const iron = new THREE.MeshStandardMaterial({ color: 0x292b2d, metalness: 0.82, roughness: 0.34 });
+    const heat = new THREE.MeshStandardMaterial({ color: 0x66210f, emissive: 0xff4b16, emissiveIntensity: 1.5, roughness: 0.48 });
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1.05, 4.2, 10), iron);
+    body.position.y = 2.1;
+    body.castShadow = true;
+    const core = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 2.8, 10), heat);
+    core.position.y = 2.05;
+    group.add(body, core);
+    for (const y of [0.45, 2.05, 3.65]) {
+      const brace = new THREE.Mesh(new THREE.TorusGeometry(0.92, 0.12, 6, 12), iron);
+      brace.rotation.x = Math.PI / 2;
+      brace.position.y = y;
+      group.add(brace);
+    }
+    this.scene.add(group);
+    this.registerDestructible(group, 'rock', 'stone', 145, 1.1, 4.2, 2.1, 0x393a3c);
+  }
+
+  private createVoidObelisk(x: number, z: number, scale: number): void {
+    const group = new THREE.Group();
+    group.position.set(x, castleGroundHeight(x, z), z);
+    group.scale.setScalar(scale);
+    const stone = new THREE.MeshStandardMaterial({ color: 0x241b3b, emissive: 0x5e25a8, emissiveIntensity: 0.38, metalness: 0.22, roughness: 0.52 });
+    const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.44, 0), new THREE.MeshBasicMaterial({ color: 0xc290ff, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending }));
+    const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.76, 5.3, 5), stone);
+    pillar.position.y = 2.65;
+    pillar.rotation.y = Math.PI / 5;
+    pillar.castShadow = true;
+    core.position.y = 4.2;
+    group.add(pillar, core);
+    const halo = new THREE.Mesh(new THREE.TorusGeometry(0.78, 0.06, 7, 22), new THREE.MeshBasicMaterial({ color: 0xa95cff, transparent: true, opacity: 0.68, blending: THREE.AdditiveBlending }));
+    halo.position.y = 4.2;
+    halo.rotation.x = Math.PI / 2;
+    group.add(halo);
+    this.scene.add(group);
+    this.registerDestructible(group, 'rock', 'stone', 128 * scale, 0.8 * scale, 5.3 * scale, 2.6 * scale, 0x6c3b9c);
+  }
+
+  private createEmberVent(x: number, z: number): void {
+    const y = castleGroundHeight(x, z);
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.74, 0.14, 7, 12),
+      new THREE.MeshStandardMaterial({ color: 0x452016, emissive: 0xff4818, emissiveIntensity: 0.9, roughness: 0.65 }),
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.set(x, y + 0.08, z);
+    this.scene.add(ring);
+  }
+
   private createBattleTree(x: number, z: number, scale: number): void {
     const ground = castleGroundHeight(x, z);
-    const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x35261b, roughness: 1 });
-    const crownMaterial = new THREE.MeshStandardMaterial({ color: 0x263f34, roughness: 0.96, flatShading: true });
+    const trunkMaterial = new THREE.MeshStandardMaterial({ color: this.level.theme.wood, roughness: 1 });
+    const foliage = this.level.environment === 'frost' ? 0xb7d8dd : this.level.environment === 'verdant' ? 0x315f35 : this.level.environment === 'eclipse' ? 0x332551 : 0x263f34;
+    const crownMaterial = new THREE.MeshStandardMaterial({ color: foliage, roughness: 0.96, flatShading: true });
     const tree = new THREE.Group();
     tree.position.set(x, ground, z);
     tree.scale.setScalar(scale);
@@ -925,7 +1097,7 @@ export class SiegeGame {
   }
 
   private buildSkyline(): void {
-    const mountainMaterial = new THREE.MeshStandardMaterial({ color: 0x20272b, roughness: 1, flatShading: true });
+    const mountainMaterial = new THREE.MeshStandardMaterial({ color: this.level.theme.mountain, roughness: 1, flatShading: true });
     for (let index = 0; index < 16; index += 1) {
       const angle = index / 16 * Math.PI * 2;
       const radius = 118 + this.random() * 30;
@@ -935,17 +1107,22 @@ export class SiegeGame {
       mountain.rotation.y = this.random() * Math.PI;
       this.scene.add(mountain);
     }
-    const moon = new THREE.Mesh(new THREE.SphereGeometry(4.5, 20, 12), new THREE.MeshBasicMaterial({ color: 0xf5c990 }));
+    const moon = new THREE.Mesh(new THREE.SphereGeometry(this.level.environment === 'eclipse' ? 6.2 : 4.5, 20, 12), new THREE.MeshBasicMaterial({ color: this.level.theme.moon }));
     moon.position.set(58, 45, -126);
     this.scene.add(moon);
+    if (this.level.environment === 'eclipse') {
+      const shadow = new THREE.Mesh(new THREE.SphereGeometry(5.4, 20, 12), new THREE.MeshBasicMaterial({ color: 0x090713 }));
+      shadow.position.set(56.7, 45.8, -123.5);
+      this.scene.add(shadow);
+    }
   }
 
   private spawnBattle(): void {
-    this.player = this.createActor('player', 'allies', 180, 4.9, 3.1, 36);
+    this.player = this.createActor('player', 'allies', this.level.playerHealth, 4.9, 3.1, this.level.playerDamage);
     this.player.rig.root.position.copy(PLAYER_START);
     this.player.rig.setGroundHeight(0);
 
-    for (let index = 0; index < 22; index += 1) {
+    for (let index = 0; index < this.level.allyCount; index += 1) {
       const role: Role = index % 10 === 0 ? 'brute' : index % 6 === 0 ? 'archer' : 'soldier';
       const actor = this.createActor(
         role,
@@ -959,39 +1136,105 @@ export class SiegeGame {
       actor.rig.setGroundHeight(0);
     }
 
-    for (let index = 0; index < 34; index += 1) {
+    const difficulty = 1 + (this.level.order - 1) * 0.075;
+    for (let index = 0; index < this.level.enemyCount; index += 1) {
       const role: Role = index % 11 === 0 ? 'brute' : index % 7 === 0 ? 'archer' : 'soldier';
       const actor = this.createActor(
         role,
         'enemies',
-        role === 'brute' ? 190 : role === 'archer' ? 70 : 96,
-        role === 'brute' ? 3.05 : role === 'archer' ? 3.12 : 3.66,
+        (role === 'brute' ? 190 : role === 'archer' ? 70 : 96) * difficulty,
+        (role === 'brute' ? 3.05 : role === 'archer' ? 3.12 : 3.66) + (this.level.order - 1) * 0.035,
         role === 'archer' ? 16 : role === 'brute' ? 2.9 : 2.3,
-        role === 'brute' ? 34 : role === 'archer' ? 12 : 17,
+        (role === 'brute' ? 34 : role === 'archer' ? 12 : 17) * (1 + (this.level.order - 1) * 0.055),
       );
       let x: number;
       let z: number;
-      if (index < 15) {
+      const frontCount = Math.ceil(this.level.enemyCount * 0.44);
+      const terraceEnd = frontCount + Math.ceil(this.level.enemyCount * 0.29);
+      if (index < frontCount) {
         x = (index % 7 - 3) * 3.1 + (this.random() - 0.5) * 1.2;
         z = -5 - Math.floor(index / 7) * 3.3;
-      } else if (index < 25) {
-        x = (index % 5 - 2) * 3.2;
-        z = -49 - Math.floor((index - 15) / 5) * 4.2;
+      } else if (index < terraceEnd) {
+        const localIndex = index - frontCount;
+        x = (localIndex % 5 - 2) * 3.2;
+        z = -49 - Math.floor(localIndex / 5) * 4.2;
       } else {
-        x = (index % 5 - 2) * 2.8;
-        z = -66.5 - Math.floor((index - 25) / 5) * 4;
+        const localIndex = index - terraceEnd;
+        x = (localIndex % 5 - 2) * 2.8;
+        z = -66.5 - Math.floor(localIndex / 5) * 4;
       }
       const height = castleGroundHeight(x, z);
       actor.rig.root.position.set(x, height, z);
       actor.rig.setGroundHeight(height);
     }
 
-    this.boss = this.createActor('boss', 'enemies', 760, 3.55, 3.5, 42);
+    const boss = this.level.boss;
+    this.boss = this.createActor('boss', 'enemies', boss.health, boss.speed, boss.attackRange, boss.damage);
     this.boss.rig.root.position.set(0, CASTLE_LIMITS.summitHeight, CASTLE_LIMITS.summitZ - 2);
     this.boss.rig.setGroundHeight(CASTLE_LIMITS.summitHeight);
     this.boss.rig.root.visible = false;
     this.boss.dead = false;
+    this.decorateBoss();
     this.emitHud(true);
+  }
+
+  private decorateBoss(): void {
+    const signature = new THREE.Group();
+    signature.name = `boss-signature-${this.level.id}`;
+    const color = this.level.boss.color;
+    const glow = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.72, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+    const metal = new THREE.MeshStandardMaterial({ color: this.level.theme.darkStone, emissive: color, emissiveIntensity: 0.26, metalness: 0.72, roughness: 0.34 });
+    const aura = new THREE.Mesh(new THREE.TorusGeometry(1.34, 0.055, 7, 30), glow);
+    aura.rotation.x = Math.PI / 2;
+    aura.position.y = 0.08;
+    signature.add(aura);
+
+    if (this.level.environment === 'frost') {
+      for (const [x, y, tilt] of [[-0.82, 2.25, -0.42], [0.82, 2.25, 0.42], [-0.48, 2.78, -0.18], [0.48, 2.78, 0.18]] as [number, number, number][]) {
+        const crystal = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.9, 6), glow);
+        crystal.position.set(x, y, 0);
+        crystal.rotation.z = tilt;
+        signature.add(crystal);
+      }
+    } else if (this.level.environment === 'verdant') {
+      for (const side of [-1, 1]) {
+        const antler = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.1, 6, 12, Math.PI * 1.2), metal);
+        antler.position.set(side * 0.56, 2.62, -0.05);
+        antler.rotation.set(Math.PI / 2, side * 0.28, side * 0.55);
+        signature.add(antler);
+      }
+      const crownVine = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.08, 6, 18), glow);
+      crownVine.rotation.x = Math.PI / 2;
+      crownVine.position.y = 2.38;
+      signature.add(crownVine);
+    } else if (this.level.environment === 'foundry') {
+      for (const side of [-1, 1]) {
+        const shoulder = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.52, 0.92), metal);
+        shoulder.position.set(side * 0.86, 2.05, 0);
+        shoulder.rotation.z = side * 0.18;
+        const chimney = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.2, 0.8, 8), glow);
+        chimney.position.set(side * 0.9, 2.72, 0.1);
+        signature.add(shoulder, chimney);
+      }
+    } else if (this.level.environment === 'eclipse') {
+      for (const [radius, tilt] of [[0.72, 0.22], [0.98, -0.35]] as [number, number][]) {
+        const halo = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.055, 7, 30), glow);
+        halo.position.set(0, 2.62, -0.22);
+        halo.rotation.set(Math.PI / 2, tilt, 0);
+        signature.add(halo);
+      }
+      const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.22, 0), glow);
+      core.position.set(0, 2.63, -0.25);
+      signature.add(core);
+    } else {
+      for (const side of [-1, 1]) {
+        const horn = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.88, 6), metal);
+        horn.position.set(side * 0.62, 2.68, 0);
+        horn.rotation.z = side * -0.5;
+        signature.add(horn);
+      }
+    }
+    this.boss.rig.root.add(signature);
   }
 
   private createActor(role: Role, team: Team, health: number, speed: number, attackRange: number, damage: number): Actor {
@@ -1092,6 +1335,7 @@ export class SiegeGame {
     this.updateActors(time, delta);
     this.updateProjectiles(delta);
     this.updateExplosives(time);
+    this.updateLevelHazards(delta);
     this.updateParticles(delta);
     this.updateCamera(delta);
     this.updateRespawn(delta);
@@ -1206,8 +1450,9 @@ export class SiegeGame {
       if (this.player.rig.root.position.z < CASTLE_LIMITS.secondStairEndZ + 0.5 && summitAllies >= 3) {
         this.phase = 3;
         this.boss.rig.root.visible = true;
+        this.bossAbilityTimer = Math.max(2.8, this.level.boss.abilityCooldown * 0.62);
         this.audio.horn();
-        this.events.onFeed('<b>Верхний двор взят.</b> Варгрим вышел к последней лестнице!');
+        this.events.onFeed(`<b>Верхний двор взят.</b> ${this.level.boss.title} ${this.level.boss.name} выходит на бой!`);
         this.events.onBattleEvent('phase', 3);
       }
     } else if (this.phase === 3) {
@@ -1216,13 +1461,99 @@ export class SiegeGame {
         if (near && this.keys.has('KeyE')) this.captureProgress = Math.min(100, this.captureProgress + delta * 34);
         else this.captureProgress = Math.max(0, this.captureProgress - delta * 5);
         if (this.captureProgress >= 100) this.victory();
-      }
+      } else this.updateBossAbility(delta);
     }
     this.fireballTimer -= delta;
     if (this.fireballTimer <= 0 && this.phase < 3) {
-      this.fireballTimer = 5.5 + this.random() * 4;
+      const [minimum, maximum] = this.level.artilleryDelay;
+      this.fireballTimer = minimum + this.random() * (maximum - minimum);
       this.launchFireball();
     }
+  }
+
+  private updateBossAbility(delta: number): void {
+    this.bossAbilityTimer -= delta;
+    if (this.bossAbilityTimer > 0 || this.boss.dead || !this.boss.rig.root.visible) return;
+    this.bossAbilityTimer = this.level.boss.abilityCooldown * (0.86 + this.random() * 0.28);
+    const bossPosition = this.boss.rig.root.position.clone();
+    const color = this.level.boss.color;
+    this.events.onFeed(`<b>${this.level.boss.abilityName}</b> · ${this.level.boss.name} применяет особую способность`);
+    if (this.level.boss.ability === 'ember-roar') {
+      this.spawnBossPulse(bossPosition, color, 5.2);
+      this.explode(bossPosition.clone().add(new THREE.Vector3(0, 0.7, 0)), 'enemies', 5.2, 30, 'armor');
+      return;
+    }
+    if (this.level.boss.ability === 'frost-nova') {
+      this.spawnBossPulse(bossPosition, color, 7);
+      if (distanceXZ(this.player.rig.root.position, bossPosition) < 7) this.player.stamina = Math.max(0, this.player.stamina - 32);
+      this.explode(bossPosition.clone().add(new THREE.Vector3(0, 0.3, 0)), 'enemies', 7, 23, 'stone');
+      return;
+    }
+    if (this.level.boss.ability === 'thorn-call') {
+      this.spawnBossPulse(bossPosition, color, 4.5);
+      for (const side of [-1, 1]) {
+        const guard = this.createActor('soldier', 'enemies', 118, 3.82, 2.45, 22);
+        const x = bossPosition.x + side * (2.2 + this.random());
+        const z = bossPosition.z + 1.4 + this.random() * 1.4;
+        const y = castleGroundHeight(x, z);
+        guard.rig.root.position.set(x, y, z);
+        guard.rig.setGroundHeight(y);
+        guard.target = this.player;
+        guard.cooldown = 0.35;
+        this.spawnImpact(guard.rig.root.position.clone().add(new THREE.Vector3(0, 1, 0)), color, 8);
+      }
+      return;
+    }
+    if (this.level.boss.ability === 'magma-quake') {
+      this.spawnBossPulse(bossPosition, color, 7.8);
+      this.explode(bossPosition.clone().add(new THREE.Vector3(0, 0.25, 0)), 'enemies', 7.8, 42, 'stone');
+      return;
+    }
+    const oldPosition = bossPosition.clone();
+    const playerFacing = this.player.rig.root.rotation.y;
+    const behind = new THREE.Vector3(-Math.sin(playerFacing), 0, -Math.cos(playerFacing)).multiplyScalar(2.8);
+    const nextPosition = this.player.rig.root.position.clone().add(behind);
+    nextPosition.x = clamp(nextPosition.x, -9.2, 9.2);
+    nextPosition.z = clamp(nextPosition.z, CASTLE_LIMITS.summitZ - 7, CASTLE_LIMITS.secondStairEndZ - 0.8);
+    nextPosition.y = castleGroundHeight(nextPosition.x, nextPosition.z);
+    this.spawnBossPulse(oldPosition, color, 3.2);
+    this.boss.rig.root.position.copy(nextPosition);
+    this.boss.rig.setGroundHeight(nextPosition.y);
+    this.boss.rig.root.rotation.y = Math.atan2(
+      this.player.rig.root.position.x - nextPosition.x,
+      this.player.rig.root.position.z - nextPosition.z,
+    );
+    this.boss.action = 'attack';
+    this.boss.actionTime = 0;
+    this.boss.hitDone = false;
+    this.boss.swingStarted = false;
+    this.boss.attackTrailTimer = 0;
+    this.boss.trailSweepAngle = undefined;
+    this.boss.target = this.player;
+    this.spawnBossPulse(nextPosition, color, 3.2);
+    this.spawnImpact(nextPosition.clone().add(new THREE.Vector3(0, 1.3, 0)), color, 14);
+  }
+
+  private spawnBossPulse(position: THREE.Vector3, color: number, radius: number): void {
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.5, 0.68, 36),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.78, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }),
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.copy(position).add(new THREE.Vector3(0, 0.12, 0));
+    const initialScale = 0.72;
+    const life = 0.72;
+    ring.scale.setScalar(initialScale);
+    this.scene.add(ring);
+    this.particles.push({
+      mesh: ring,
+      velocity: new THREE.Vector3(),
+      life,
+      maxLife: life,
+      baseOpacity: 0.78,
+      gravity: 0,
+      growth: Math.log(radius / (0.68 * initialScale)) / life,
+    });
   }
 
   private updateActors(time: number, delta: number): void {
@@ -1264,6 +1595,7 @@ export class SiegeGame {
           actor.hitDone = false;
           actor.swingStarted = false;
           actor.attackTrailTimer = 0;
+          actor.trailSweepAngle = undefined;
           actor.cooldown = actor.role === 'boss' ? 0.86 : actor.role === 'brute' ? 1.35 : actor.role === 'archer' ? 1.9 + this.random() : 1.1 + this.random() * 0.45;
           if (actor.role === 'archer') this.audio.bow();
         }
@@ -1457,6 +1789,7 @@ export class SiegeGame {
     this.player.hitDone = false;
     this.player.swingStarted = false;
     this.player.attackTrailTimer = 0;
+    this.player.trailSweepAngle = undefined;
     this.player.cooldown = profile.duration + 0.06;
     this.player.stamina -= 12;
     this.player.rig.root.rotation.y = this.yaw;
@@ -1587,7 +1920,7 @@ export class SiegeGame {
     target.rig.setState('dead', 0, 0.016);
     if (attacker === this.player) {
       this.kills += 1;
-      this.events.onFeed(`<b>${target.role === 'boss' ? 'Лорд Варгрим повержен' : 'Страж повержен'}</b> · ${Math.round(attacker.damage)} урона`);
+      this.events.onFeed(`<b>${target.role === 'boss' ? `${this.level.boss.title} ${this.level.boss.name} повержен` : 'Страж повержен'}</b> · ${Math.round(attacker.damage)} урона`);
     }
     if (target === this.player) {
       this.jumpTimer = 0;
@@ -1596,7 +1929,7 @@ export class SiegeGame {
       this.events.onFeed('<b>Вы пали.</b> Союзники возвращают вас в строй…');
     }
     if (target === this.boss) {
-      this.events.onFeed('<b>Варгрим пал.</b> Поднимите знамя у донжона!');
+      this.events.onFeed(`<b>${this.level.boss.name} пал.</b> Поднимите знамя у донжона!`);
       this.audio.horn();
     }
   }
@@ -1768,6 +2101,21 @@ export class SiegeGame {
       const target = this.actors.find((actor) => !actor.dead && actor.team !== explosive.team && distanceXZ(actor.rig.root.position, explosive.group.position) < explosive.triggerRadius);
       if (target) this.detonateExplosive(explosive, explosive.team);
     }
+  }
+
+  private updateLevelHazards(delta: number): void {
+    if (this.player.dead || this.hazards.length === 0) return;
+    this.hazardDamageTimer = Math.max(0, this.hazardDamageTimer - delta);
+    const hazard = this.hazards.find((candidate) =>
+      Math.abs(this.player.rig.root.position.y - candidate.position.y) < 2.1
+      && distanceXZ(this.player.rig.root.position, candidate.position) < candidate.radius * 0.82,
+    );
+    if (!hazard) return;
+    this.player.stamina = Math.max(0, this.player.stamina - hazard.staminaDrain * delta);
+    if (hazard.damage <= 0 || this.hazardDamageTimer > 0) return;
+    this.hazardDamageTimer = 0.58;
+    this.spawnImpact(this.player.rig.root.position.clone().add(new THREE.Vector3(0, 0.35, 0)), hazard.color, 7);
+    this.damageActor(this.player, hazard.damage, this.boss, 'explosion');
   }
 
   private detonateExplosive(explosive: ExplosiveProp, sourceTeam: Team | 'neutral'): void {
@@ -1951,31 +2299,59 @@ export class SiegeGame {
     const sweep = bladeSweepAngle(actor.actionTime, profile);
     if (sweep === undefined) return;
     const facing = actor.rig.root.rotation.y;
-    const forward = new THREE.Vector3(Math.sin(facing), 0, Math.cos(facing));
     const scale = actor.role === 'boss' ? 1.42 : actor.role === 'brute' ? 1.2 : 1;
+    const previousSweep = actor.trailSweepAngle ?? profile.sweepStart;
+    actor.trailSweepAngle = sweep;
+    if (Math.abs(sweep - previousSweep) < 0.012) return;
+    const steps = Math.max(3, Math.ceil(Math.abs(sweep - previousSweep) / 0.1));
+    const positions: number[] = [];
+    const innerRadius = 0.48 * scale;
+    const outerRadius = 2.18 * scale;
+    const vertex = (angle: number, radius: number, outer: boolean): [number, number, number] => {
+      const worldAngle = facing + angle;
+      return [
+        Math.sin(worldAngle) * radius,
+        (outer ? 1.38 : 0.92) * scale + Math.cos(angle * 0.72) * (outer ? 0.16 : 0.04),
+        Math.cos(worldAngle) * radius,
+      ];
+    };
+    for (let index = 0; index < steps; index += 1) {
+      const start = previousSweep + (sweep - previousSweep) * (index / steps);
+      const end = previousSweep + (sweep - previousSweep) * ((index + 1) / steps);
+      const innerStart = vertex(start, innerRadius, false);
+      const outerStart = vertex(start, outerRadius, true);
+      const innerEnd = vertex(end, innerRadius, false);
+      const outerEnd = vertex(end, outerRadius, true);
+      positions.push(...innerStart, ...outerStart, ...outerEnd, ...innerStart, ...outerEnd, ...innerEnd);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.computeVertexNormals();
     const trail = new THREE.Mesh(
-      new THREE.RingGeometry(0.58 * scale, 1.5 * scale, 14, 1, -0.52, 0.86),
+      geometry,
       new THREE.MeshBasicMaterial({
-        color: actor.team === 'allies' ? 0xd7f6ff : 0xff7540,
+        color: actor.team === 'allies' ? 0x67cfff : 0xff6d32,
         transparent: true,
-        opacity: actor === this.player ? 0.56 : 0.38,
+        opacity: actor === this.player ? 0.27 : 0.2,
+        depthTest: false,
         depthWrite: false,
         side: THREE.DoubleSide,
         blending: THREE.AdditiveBlending,
+        toneMapped: false,
       }),
     );
-    trail.position.copy(actor.rig.root.position).add(new THREE.Vector3(0, 1.18 * scale, 0)).addScaledVector(forward, 1.05 * scale);
-    trail.quaternion.setFromUnitVectors(FORWARD, forward);
-    trail.rotateZ(-0.72 + sweep * 0.2);
+    trail.position.copy(actor.rig.root.position);
+    trail.renderOrder = 12;
     this.scene.add(trail);
     this.particles.push({
       mesh: trail,
-      velocity: forward.clone().multiplyScalar(0.35),
-      life: 0.14,
-      maxLife: 0.14,
+      velocity: new THREE.Vector3(),
+      life: 0.24,
+      maxLife: 0.24,
+      baseOpacity: actor === this.player ? 0.27 : 0.2,
       gravity: 0,
-      drag: 4,
-      growth: 0.7,
+      drag: 0,
+      growth: 0.18,
     });
   }
 
@@ -2070,7 +2446,7 @@ export class SiegeGame {
       }
       if (particle.growth) particle.mesh.scale.multiplyScalar(1 + particle.growth * delta);
       const material = particle.mesh.material as THREE.MeshBasicMaterial;
-      material.opacity = clamp(particle.life / particle.maxLife, 0, 1);
+      material.opacity = (particle.baseOpacity ?? 1) * clamp(particle.life / particle.maxLife, 0, 1);
       if (particle.life <= 0) {
         this.scene.remove(particle.mesh);
         this.particles.splice(index, 1);
@@ -2199,7 +2575,7 @@ export class SiegeGame {
   private emitHud(force = false): void {
     if (!force && this.elapsed - this.lastHud < 0.08) return;
     this.lastHud = this.elapsed;
-    let objective = 'Сопровождайте таран к воротам';
+    let objective = `Проведите таран · ${this.level.title}`;
     let progress = clamp((15 - this.ram.position.z) / 36.9 * 100, 0, 100);
     if (this.phase === 1) {
       objective = 'Защитите таран и сокрушите ворота';
@@ -2209,7 +2585,7 @@ export class SiegeGame {
       objective = `Прорвитесь на верхний ярус вместе с легионом · ${summitAllies}/3`;
       progress = clamp((-this.player.rig.root.position.z - 29) / 35 * 100, 0, 100);
     } else if (this.phase === 3) {
-      objective = this.boss.dead ? 'Удерживайте E у знамени' : 'Сразите лорда Варгрима';
+      objective = this.boss.dead ? 'Удерживайте E у знамени' : `Сразите: ${this.level.boss.title} ${this.level.boss.name}`;
       progress = this.boss.dead ? this.captureProgress : 100 - this.boss.health / this.boss.maxHealth * 100;
     }
     this.events.onHud({
@@ -2369,12 +2745,12 @@ export class SiegeGame {
     const holder = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 1.4, 6), new THREE.MeshStandardMaterial({ color: 0x342519, roughness: 0.9 }));
     holder.position.copy(position).add(new THREE.Vector3(0, 0.7, 0));
     this.scene.add(holder);
-    const flame = new THREE.Mesh(new THREE.SphereGeometry(0.16, 7, 5), new THREE.MeshBasicMaterial({ color: 0xffa12e }));
+    const flame = new THREE.Mesh(new THREE.SphereGeometry(0.16, 7, 5), new THREE.MeshBasicMaterial({ color: this.level.theme.accent }));
     flame.name = 'torch-flame';
     flame.position.copy(position).add(new THREE.Vector3(0, 1.5, 0));
     flame.scale.y = 1.8;
     this.scene.add(flame);
-    const light = new THREE.PointLight(0xff7b22, 2.3, 8, 2);
+    const light = new THREE.PointLight(this.level.theme.accent, 2.3, 8, 2);
     light.position.copy(flame.position);
     light.name = 'torch-light';
     this.scene.add(light);

@@ -23,12 +23,23 @@
           <p class="subtitle">ASHEN SIEGE</p>
           <p class="pitch">Проведи таран сквозь огонь. Сломай Чёрные врата.<br />Подними знамя там, где падали короли.</p>
           <div class="landing-actions">
-            <button id="play-solo" class="primary-button"><b>Начать штурм</b><span>Одиночная битва</span></button>
+            <button id="play-solo" class="primary-button"><b>Кампания</b><span id="campaign-continue">Пять крепостей подряд</span></button>
+            <button id="open-maps" class="secondary-button"><b>Выбор карты</b><span>Любая операция отдельно</span></button>
             <button id="open-multiplayer" class="secondary-button"><b>Сетевая битва</b><span>Комнаты до 8 рыцарей</span></button>
           </div>
           <div class="landing-note"><kbd>WASD</kbd> движение <i></i><kbd>ЛКМ</kbd> удар <i></i><kbd>ПКМ</kbd> блок <i></i><kbd>SPACE</kbd> прыжок-таран</div>
         </div>
         <div class="build-mark">WEBGL SIEGE · KAYKIT CC0 · v1.1</div>
+      </section>
+
+      <section id="map-select" class="screen" aria-labelledby="map-select-title">
+        <div class="map-select-panel">
+          <button class="close-button" data-close="maps" aria-label="Закрыть">×</button>
+          <div class="eyebrow">КАРТА ВОЙНЫ</div>
+          <h2 id="map-select-title">Пять крепостей</h2>
+          <p>Проходи кампанию подряд или начинай любую операцию отдельно.</p>
+          <div id="level-grid" class="level-grid"></div>
+        </div>
       </section>
 
       <section id="lobby" class="screen" aria-labelledby="lobby-title">
@@ -48,10 +59,10 @@
 
       <section id="briefing" class="screen" aria-labelledby="briefing-title">
         <div class="briefing-card">
-          <div class="mission-number">ОПЕРАЦИЯ I</div>
+          <div id="mission-number" class="mission-number">ОПЕРАЦИЯ I</div>
           <h2 id="briefing-title">Чёрные врата</h2>
-          <p>Северный легион держит последнюю переправу. Наш таран уже на склоне. За стенами ждёт лорд Варгрим.</p>
-          <div class="mission-objectives">
+          <p id="briefing-copy">Северный легион держит последнюю переправу. Наш таран уже на склоне. За стенами ждёт лорд Варгрим.</p>
+          <div id="mission-objectives" class="mission-objectives">
             <div><span>01</span><p><b>Провести таран</b>Держись рядом и сметай завалы прыжком или оружием.</p></div>
             <div><span>02</span><p><b>Проломить ворота</b>Прикрывай таран от стражи и огненных стрел.</p></div>
             <div><span>03</span><p><b>Взять внутренний двор</b>Срази Варгрима и подними наше знамя.</p></div>
@@ -87,11 +98,12 @@
           <label class="setting-row"><span>Громкость</span><input id="volume" type="range" min="0" max="100" value="65" /></label>
           <label class="setting-row"><span>Качество</span><select id="quality"><option value="high">Высокое</option><option value="medium">Среднее</option><option value="low">Низкое</option></select></label>
           <button id="restart">Начать заново</button>
+          <button id="pause-map-select">Выбор карты</button>
         </div>
       </section>
 
       <section id="ending" class="screen" aria-labelledby="ending-title">
-        <div class="ending-rays"></div><div class="ending-card"><div class="eyebrow">ЧЁРНЫЕ ВРАТА ПАЛИ</div><h2 id="ending-title">Пепел помнит</h2><p id="ending-stats"></p><button id="play-again" class="primary-button"><b>Повторить штурм</b></button></div>
+        <div class="ending-rays"></div><div class="ending-card"><div id="ending-eyebrow" class="eyebrow">ЧЁРНЫЕ ВРАТА ПАЛИ</div><h2 id="ending-title">Пепел помнит</h2><p id="ending-stats"></p><div class="ending-actions"><button id="next-level" class="primary-button"><b>Следующая операция</b><span id="next-level-name"></span></button><button id="play-again"><b>Повторить</b></button><button id="ending-map-select"><b>Выбор карт</b></button></div></div>
       </section>
 
       <div id="mobile-controls" class="hidden">

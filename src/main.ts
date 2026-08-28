@@ -2,6 +2,7 @@ import './style.css';
 import { SiegeGame, type HudState } from './game/game';
 import { preloadKnightAssets } from './game/models';
 import { NetworkClient } from './network';
+import { loadGameSettings, saveGameSettings } from './settings';
 
 function element<T extends HTMLElement>(selector: string): T {
   const found = document.querySelector<T>(selector);
@@ -26,6 +27,11 @@ const chatToggle = element<HTMLButtonElement>('#chat-toggle');
 const chatMessages = element('#chat-messages');
 const roomBadge = element('#room-badge');
 const lobbyStatus = element('#lobby-status');
+const volumeInput = element<HTMLInputElement>('#volume');
+const qualitySelect = element<HTMLSelectElement>('#quality');
+let settings = loadGameSettings();
+volumeInput.value = String(Math.round(settings.volume * 100));
+qualitySelect.value = settings.quality;
 let multiplayer = false;
 let damageTimer = 0;
 
@@ -60,6 +66,8 @@ const game = new SiegeGame(canvas, {
   onNetworkState: (state) => network.sendPlayer(state),
   onBattleEvent: (type, value) => network.sendBattleEvent(type, value),
 });
+game.setVolume(settings.volume);
+game.setQuality(settings.quality);
 if (import.meta.env.DEV) Object.assign(window, { __smiteGame: game });
 
 const minimumLoadingTime = new Promise<void>((resolve) => window.setTimeout(resolve, 700));
@@ -138,11 +146,15 @@ element<HTMLButtonElement>('#play-again').addEventListener('click', () => {
   hud.classList.remove('hidden');
   game.restart();
 });
-element<HTMLInputElement>('#volume').addEventListener('input', (event) => {
-  game.setVolume(Number((event.currentTarget as HTMLInputElement).value) / 100);
+volumeInput.addEventListener('input', () => {
+  settings = { ...settings, volume: Number(volumeInput.value) / 100 };
+  game.setVolume(settings.volume);
+  saveGameSettings(settings);
 });
-element<HTMLSelectElement>('#quality').addEventListener('change', (event) => {
-  game.setQuality((event.currentTarget as HTMLSelectElement).value as 'high' | 'medium' | 'low');
+qualitySelect.addEventListener('change', () => {
+  settings = { ...settings, quality: qualitySelect.value as typeof settings.quality };
+  game.setQuality(settings.quality);
+  saveGameSettings(settings);
 });
 
 chatToggle.addEventListener('click', () => {

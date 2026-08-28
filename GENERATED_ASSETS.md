@@ -30,3 +30,15 @@ for their accepted in-game role after visual review rather than claiming an exac
 word of the prompt. `eclipse-rune-column.glb` retained a higher budget because its thin crown fragments did
 not satisfy the automatic geometric quality gate at lower budgets; it was accepted after multi-angle visual
 inspection.
+
+## Favicon
+
+The favicon was generated on 2026-08-29 with the built-in OpenAI image generation tool, then simplified
+and reviewed at its actual 16 px and 32 px sizes. The accepted mark uses a front-facing pale knight helmet,
+a black diamond shield with an antique-gold rim, and a single ember-orange crest. The final transparent
+source was resized with Lanczos filtering into `favicon-16x16.png`, `favicon-32x32.png`,
+`apple-touch-icon.png`, and `favicon.png`; `favicon.ico` is the 32 px compatibility export.
+
+Final prompt summary: "A minimal, symmetrical front-facing knight helmet inside a rotated black diamond,
+with a thick antique-gold rim and a simple three-lobed ember-orange crest; flat vector-like raster shapes,
+high contrast, no text, and genuine transparency outside the diamond; readable at 16x16 and 32x32."

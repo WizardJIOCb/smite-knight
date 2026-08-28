@@ -5,6 +5,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import type { NetworkPlayer } from '../../shared/protocol';
 import { BattleAudio } from './audio';
+import { applyDestructibleDamage, pointHitsObstacle, radialDestructibleDamage, segmentHitsObstacle } from './destruction';
 import { KnightRig, createRemoteKnight, type RigAction } from './models';
 import {
   angleDelta,
@@ -109,6 +110,21 @@ interface ExplosiveProp {
   team: Team | 'neutral';
 }
 
+type DestructibleKind = 'rock' | 'stake' | 'tent' | 'tree' | 'crates' | 'barricade' | 'cart' | 'logs' | 'urns' | 'weapon-rack';
+
+interface DestructibleProp {
+  root: THREE.Object3D;
+  kind: DestructibleKind;
+  surface: Extract<ImpactSurface, 'wood' | 'stone'>;
+  health: number;
+  maxHealth: number;
+  radius: number;
+  height: number;
+  centerOffsetY: number;
+  debrisColor: number;
+  destroyed: boolean;
+}
+
 interface RemoteRig {
   rig: KnightRig;
   targetPosition: THREE.Vector3;
@@ -136,6 +152,7 @@ export class SiegeGame {
   private readonly projectiles: Projectile[] = [];
   private readonly particles: Particle[] = [];
   private readonly explosives: ExplosiveProp[] = [];
+  private readonly destructibles: DestructibleProp[] = [];
   private readonly remotes = new Map<string, RemoteRig>();
   private readonly temp = new THREE.Vector3();
   private readonly temp2 = new THREE.Vector3();
@@ -242,6 +259,11 @@ export class SiegeGame {
     for (const explosive of this.explosives) {
       explosive.armed = true;
       explosive.group.visible = true;
+    }
+    for (const prop of this.destructibles) {
+      prop.health = prop.maxHealth;
+      prop.destroyed = false;
+      prop.root.visible = true;
     }
     this.spawnBattle();
     this.start();
@@ -590,25 +612,30 @@ export class SiegeGame {
       const x = (this.random() - 0.5) * 78;
       const z = (this.random() - 0.45) * 66;
       if (Math.abs(x) < 7 && z > -30) continue;
+      const radius = 0.18 + this.random() * 0.75;
       const rock = new THREE.Mesh(
-        new THREE.DodecahedronGeometry(0.18 + this.random() * 0.75, 0),
+        new THREE.DodecahedronGeometry(radius, 0),
         new THREE.MeshStandardMaterial({ color: 0x57554d, roughness: 1 }),
       );
       rock.position.set(x, rock.geometry.boundingSphere?.radius ?? 0.2, z);
-      rock.scale.y = 0.45 + this.random() * 0.6;
+      const heightScale = 0.45 + this.random() * 0.6;
+      rock.scale.y = heightScale;
       rock.rotation.set(this.random(), this.random() * Math.PI, this.random());
       rock.castShadow = rock.receiveShadow = true;
       this.scene.add(rock);
+      this.registerDestructible(rock, 'rock', 'stone', 16 + radius * 38, Math.max(0.22, radius * 0.86), radius * 2 * heightScale, 0, 0x69665e);
     }
 
     for (let index = 0; index < 14; index += 1) {
       const x = (index % 2 ? 1 : -1) * (10 + this.random() * 25);
       const z = 4 + this.random() * 32;
-      const stake = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.12, 3 + this.random() * 2.8, 5), new THREE.MeshStandardMaterial({ color: 0x211a14, roughness: 1 }));
+      const height = 3 + this.random() * 2.8;
+      const stake = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.12, height, 5), new THREE.MeshStandardMaterial({ color: 0x211a14, roughness: 1 }));
       stake.position.set(x, 1.2, z);
       stake.rotation.z = (this.random() - 0.5) * 0.3;
       stake.castShadow = true;
       this.scene.add(stake);
+      this.registerDestructible(stake, 'stake', 'wood', 18, 0.28, height, 0, 0x3b2819);
     }
 
     for (const [x, z] of [[-14, 28], [15, 32], [-23, 20], [25, 12]] as [number, number][]) {
@@ -618,6 +645,7 @@ export class SiegeGame {
       tent.scale.z = 1.35;
       tent.castShadow = true;
       this.scene.add(tent);
+      this.registerDestructible(tent, 'tent', 'wood', 78, 2.45, 3.1, 0, 0x405957);
       this.createTorch(new THREE.Vector3(x + 3.3, 0.2, z));
     }
 
@@ -628,11 +656,29 @@ export class SiegeGame {
 
     for (const [x, z, layers] of [
       [-11, 7, 2], [12, -7, 3], [-18, -17, 2], [9, -35, 3], [-10, -51, 2], [7, -68, 2],
+      [19, 17, 2], [-15, -38, 2],
     ] as [number, number, number][]) this.createCrateStack(x, z, layers);
 
     for (const [x, z, rotation] of [
       [-8, 1, 0.18], [9, -14, -0.2], [-12, -33, 0.08], [10, -55, -0.12],
+      [17, 9, -0.3], [-8, -48, 0.24], [-8, -72, -0.18],
     ] as [number, number, number][]) this.createBarricade(x, z, rotation);
+
+    for (const [x, z, rotation] of [
+      [-18, 23, 0.2], [20, -4, -0.35], [-12, -52, 0.15],
+    ] as [number, number, number][]) this.createSupplyCart(x, z, rotation);
+
+    for (const [x, z, rotation] of [
+      [10, 13, 0.12], [-21, -5, -0.18], [12, -37, 0.08], [-9, -56, -0.1], [10, -73, 0.2],
+    ] as [number, number, number][]) this.createLogPile(x, z, rotation);
+
+    for (const [x, z] of [
+      [-7, -31], [8, -48], [-12, -55], [-3, -68], [-3, -74],
+    ] as [number, number][]) this.createUrnCluster(x, z);
+
+    for (const [x, z, rotation] of [
+      [-14, -10, 0.15], [15, -35, -0.22], [-9, -50, 0.1], [9, -65, -0.2],
+    ] as [number, number, number][]) this.createWeaponRack(x, z, rotation);
 
     for (const [x, z] of [
       [-6, -9], [7, -15], [-13, -34], [11, -49], [-8, -67], [8, -70],
@@ -663,21 +709,26 @@ export class SiegeGame {
     }
     tree.rotation.y = this.random() * Math.PI;
     this.scene.add(tree);
+    this.registerDestructible(tree, 'tree', 'wood', 118 * scale, 0.82 * scale, 6.8 * scale, 3.2 * scale, 0x3f2d1e);
   }
 
   private createCrateStack(x: number, z: number, layers: number): void {
     const material = new THREE.MeshStandardMaterial({ map: this.createWoodTexture(), color: 0x704526, roughness: 0.9 });
     const ground = castleGroundHeight(x, z);
+    const group = new THREE.Group();
+    group.position.set(x, ground, z);
     for (let layer = 0; layer < layers; layer += 1) {
       const count = Math.max(1, layers - layer);
       for (let index = 0; index < count; index += 1) {
         const crate = new THREE.Mesh(new THREE.BoxGeometry(1.05, 1.05, 1.05), material);
-        crate.position.set(x + (index - (count - 1) / 2) * 1.08, ground + 0.54 + layer * 1.06, z);
+        crate.position.set((index - (count - 1) / 2) * 1.08, 0.54 + layer * 1.06, 0);
         crate.rotation.y = (this.random() - 0.5) * 0.18;
         crate.castShadow = crate.receiveShadow = true;
-        this.scene.add(crate);
+        group.add(crate);
       }
     }
+    this.scene.add(group);
+    this.registerDestructible(group, 'crates', 'wood', 42 + layers * 30, 0.7 + layers * 0.48, layers * 1.08, layers * 0.54, 0x784729);
   }
 
   private createBarricade(x: number, z: number, rotation: number): void {
@@ -697,6 +748,132 @@ export class SiegeGame {
     beam.castShadow = true;
     group.add(beam);
     this.scene.add(group);
+    this.registerDestructible(group, 'barricade', 'wood', 82, 2.35, 2.75, 1.2, 0x4f2c18);
+  }
+
+  private createSupplyCart(x: number, z: number, rotation: number): void {
+    const group = new THREE.Group();
+    group.position.set(x, castleGroundHeight(x, z), z);
+    group.rotation.y = rotation;
+    const wood = new THREE.MeshStandardMaterial({ map: this.createWoodTexture(), color: 0x654024, roughness: 0.9 });
+    const iron = new THREE.MeshStandardMaterial({ color: 0x2c3032, metalness: 0.76, roughness: 0.36 });
+    const bed = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.42, 2.8), wood);
+    bed.position.y = 1.05;
+    bed.castShadow = bed.receiveShadow = true;
+    group.add(bed);
+    for (const side of [-1, 1]) {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.1, 2.9), wood);
+      wall.position.set(side * 1.02, 1.55, 0);
+      wall.castShadow = true;
+      group.add(wall);
+      for (const zOffset of [-0.9, 0.9]) {
+        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.18, 10), iron);
+        wheel.rotation.z = Math.PI / 2;
+        wheel.position.set(side * 1.16, 0.62, zOffset);
+        wheel.castShadow = true;
+        group.add(wheel);
+      }
+    }
+    for (const xOffset of [-0.62, 0.62]) {
+      const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 2.4, 6), wood);
+      handle.rotation.x = Math.PI / 2;
+      handle.position.set(xOffset, 0.82, 2.45);
+      group.add(handle);
+    }
+    this.scene.add(group);
+    this.registerDestructible(group, 'cart', 'wood', 112, 1.75, 2.2, 1.1, 0x684124);
+  }
+
+  private createLogPile(x: number, z: number, rotation: number): void {
+    const group = new THREE.Group();
+    group.position.set(x, castleGroundHeight(x, z), z);
+    group.rotation.y = rotation;
+    const bark = new THREE.MeshStandardMaterial({ color: 0x4d2d1b, roughness: 1 });
+    const cut = new THREE.MeshStandardMaterial({ color: 0xa0784b, roughness: 0.92 });
+    for (let index = 0; index < 7; index += 1) {
+      const log = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.25, 2.8, 8), index % 3 === 0 ? cut : bark);
+      log.rotation.x = Math.PI / 2;
+      log.position.set((index % 3 - 1) * 0.48, 0.28 + Math.floor(index / 3) * 0.43, 0);
+      log.castShadow = log.receiveShadow = true;
+      group.add(log);
+    }
+    this.scene.add(group);
+    this.registerDestructible(group, 'logs', 'wood', 68, 1.45, 1.25, 0.62, 0x57311c);
+  }
+
+  private createUrnCluster(x: number, z: number): void {
+    const group = new THREE.Group();
+    group.position.set(x, castleGroundHeight(x, z), z);
+    const clay = new THREE.MeshStandardMaterial({ color: 0x8a6545, roughness: 0.84, flatShading: true });
+    for (const [ox, oz, scale] of [[-0.42, 0.1, 0.88], [0.25, -0.2, 1.1], [0.5, 0.42, 0.72]] as [number, number, number][]) {
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.38 * scale, 9, 6), clay);
+      body.scale.y = 1.18;
+      body.position.set(ox, 0.42 * scale, oz);
+      body.castShadow = body.receiveShadow = true;
+      group.add(body);
+      const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.16 * scale, 0.22 * scale, 0.32 * scale, 8), clay);
+      neck.position.set(ox, 0.77 * scale, oz);
+      neck.castShadow = true;
+      group.add(neck);
+    }
+    this.scene.add(group);
+    this.registerDestructible(group, 'urns', 'stone', 26, 0.9, 1.3, 0.65, 0x9a7655);
+  }
+
+  private createWeaponRack(x: number, z: number, rotation: number): void {
+    const group = new THREE.Group();
+    group.position.set(x, castleGroundHeight(x, z), z);
+    group.rotation.y = rotation;
+    const wood = new THREE.MeshStandardMaterial({ color: 0x4b2e1d, roughness: 0.94 });
+    const steel = new THREE.MeshStandardMaterial({ color: 0x9aa2a6, metalness: 0.82, roughness: 0.28 });
+    for (const side of [-1, 1]) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.18, 2.2, 0.18), wood);
+      post.position.set(side * 0.9, 1.1, 0);
+      post.castShadow = true;
+      group.add(post);
+    }
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(2.15, 0.2, 0.22), wood);
+    rail.position.y = 1.25;
+    rail.castShadow = true;
+    group.add(rail);
+    for (const offset of [-0.58, 0, 0.58]) {
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 2.35, 5), wood);
+      shaft.position.set(offset, 1.25, 0.12);
+      shaft.rotation.z = offset * 0.08;
+      group.add(shaft);
+      const blade = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.42, 5), steel);
+      blade.position.set(offset, 2.52, 0.12);
+      blade.rotation.z = offset * 0.08;
+      blade.castShadow = true;
+      group.add(blade);
+    }
+    this.scene.add(group);
+    this.registerDestructible(group, 'weapon-rack', 'wood', 54, 1.2, 2.85, 1.42, 0x5a3520);
+  }
+
+  private registerDestructible(
+    root: THREE.Object3D,
+    kind: DestructibleKind,
+    surface: Extract<ImpactSurface, 'wood' | 'stone'>,
+    maxHealth: number,
+    radius: number,
+    height: number,
+    centerOffsetY: number,
+    debrisColor: number,
+  ): void {
+    root.userData.destructibleKind = kind;
+    this.destructibles.push({
+      root,
+      kind,
+      surface,
+      health: maxHealth,
+      maxHealth,
+      radius,
+      height,
+      centerOffsetY,
+      debrisColor,
+      destroyed: false,
+    });
   }
 
   private createExplosiveBarrel(x: number, z: number): void {
@@ -946,6 +1123,7 @@ export class SiegeGame {
       this.player.rig.root.position.addScaledVector(this.jumpDirection, jumpSpeed * delta);
       this.resolveWorldCollision(this.player.rig.root.position);
       this.resolveRamCollision(this.player.rig.root.position);
+      this.damageJumpObstacles();
       this.player.rig.setVerticalOffset(Math.sin(progress * Math.PI) * 0.66);
       this.player.rig.setGroundHeight(castleGroundHeight(this.player.rig.root.position.x, this.player.rig.root.position.z));
       this.player.rig.root.rotation.y = dampAngle(
@@ -982,6 +1160,7 @@ export class SiegeGame {
     } else if (this.player.action === 'run') this.player.action = 'idle';
     this.resolveWorldCollision(this.player.rig.root.position);
     this.resolveRamCollision(this.player.rig.root.position);
+    this.resolveDestructibleCollision(this.player.rig.root.position);
     this.syncActorGround(this.player, delta);
     this.player.rig.setState(this.player.action, inputStrength, delta);
   }
@@ -1181,8 +1360,11 @@ export class SiegeGame {
 
   private actorMeleeHit(actor: Actor): void {
     const target = actor.target;
-    if (!target || target.dead || !pointInAttackArc({ x: actor.rig.root.position.x, z: actor.rig.root.position.z, rotation: actor.rig.root.rotation.y }, target.rig.root.position, actor.attackRange + 0.45)) return;
-    this.damageActor(target, actor.damage * (0.82 + this.random() * 0.34), actor);
+    const attacker = { x: actor.rig.root.position.x, z: actor.rig.root.position.z, rotation: actor.rig.root.rotation.y };
+    if (target && !target.dead && pointInAttackArc(attacker, target.rig.root.position, actor.attackRange + 0.45)) {
+      this.damageActor(target, actor.damage * (0.82 + this.random() * 0.34), actor);
+    }
+    this.damageDestructiblesInArc(attacker, actor.rig.root.position.y, actor.attackRange + 0.65, Math.PI * 0.46, actor.damage * 0.9);
   }
 
   private playerAttack(): void {
@@ -1213,6 +1395,7 @@ export class SiegeGame {
         this.detonateExplosive(explosive, 'allies');
         hit = true;
       }
+      if (this.damageDestructiblesInArc(attacker, this.player.rig.root.position.y, 3.55, Math.PI * 0.52, this.player.damage * 1.18)) hit = true;
       if (hit) this.audio.hit(false);
     }, 180);
   }
@@ -1232,6 +1415,94 @@ export class SiegeGame {
     this.player.actionTime = 0;
     this.player.rig.setState('jump', 1.35, 0.016);
     this.spawnJumpTrail(this.player.rig.root.position, this.jumpDirection);
+  }
+
+  private damageJumpObstacles(): void {
+    const playerPosition = this.player.rig.root.position;
+    const contact = new THREE.Vector3(playerPosition.x, playerPosition.y + 0.82, playerPosition.z);
+    let smashed = false;
+    for (const prop of this.destructibles) {
+      if (prop.destroyed || !pointHitsObstacle(contact, {
+        x: prop.root.position.x,
+        y: prop.root.position.y + prop.centerOffsetY,
+        z: prop.root.position.z,
+        radius: prop.radius,
+        height: prop.height,
+      }, 0.72)) continue;
+      smashed = this.damageDestructible(prop, prop.maxHealth + 1, contact, this.jumpDirection) || smashed;
+    }
+    for (const explosive of this.explosives) {
+      if (!explosive.armed || distanceXZ(playerPosition, explosive.group.position) > explosive.triggerRadius + 0.72) continue;
+      this.detonateExplosive(explosive, explosive.kind === 'mine' ? explosive.team : 'allies');
+      smashed = true;
+    }
+    if (smashed) {
+      this.cameraShake = Math.max(this.cameraShake, 0.24);
+      this.audio.hit(false);
+    }
+  }
+
+  private damageDestructiblesInArc(
+    attacker: { x: number; z: number; rotation: number },
+    attackerHeight: number,
+    range: number,
+    halfArc: number,
+    damage: number,
+  ): boolean {
+    const force = new THREE.Vector3(Math.sin(attacker.rotation), 0.22, Math.cos(attacker.rotation)).normalize();
+    let hits = 0;
+    for (const prop of this.destructibles) {
+      if (prop.destroyed || Math.abs(prop.root.position.y - attackerHeight) > 3.4) continue;
+      if (!pointInAttackArc(attacker, prop.root.position, range + prop.radius * 0.45, halfArc)) continue;
+      const impact = new THREE.Vector3(
+        prop.root.position.x,
+        prop.root.position.y + Math.min(prop.centerOffsetY, 1.25),
+        prop.root.position.z,
+      );
+      if (this.damageDestructible(prop, damage, impact, force)) hits += 1;
+      if (hits >= 5) break;
+    }
+    return hits > 0;
+  }
+
+  private damageDestructible(prop: DestructibleProp, damage: number, impact: THREE.Vector3, force: THREE.Vector3): boolean {
+    const next = applyDestructibleDamage(prop, damage);
+    if (next === prop || next.health === prop.health && next.destroyed === prop.destroyed) return false;
+    prop.health = next.health;
+    prop.destroyed = next.destroyed;
+    if (!prop.destroyed) {
+      this.spawnImpact(impact, prop.surface === 'stone' ? 0xb7aa91 : 0xb87942, 4);
+      return true;
+    }
+    prop.root.visible = false;
+    this.spawnDestructibleDebris(prop, impact, force);
+    this.cameraShake = Math.max(this.cameraShake, clamp(prop.radius * 0.12, 0.08, 0.38));
+    return true;
+  }
+
+  private spawnDestructibleDebris(prop: DestructibleProp, impact: THREE.Vector3, force: THREE.Vector3): void {
+    const fragmentCount = Math.min(22, 7 + Math.round(prop.radius * 5));
+    const size = clamp(prop.radius * 0.12, 0.07, 0.24);
+    this.spawnImpact(impact, prop.surface === 'stone' ? 0xd1c2a5 : 0xc77a3d, 8 + Math.round(prop.radius * 3));
+    for (let index = 0; index < fragmentCount; index += 1) {
+      const geometry = prop.surface === 'stone'
+        ? new THREE.DodecahedronGeometry(size * (0.55 + this.random() * 0.8), 0)
+        : new THREE.BoxGeometry(size * (0.45 + this.random()), size * (0.35 + this.random() * 0.7), size * (1 + this.random() * 1.6));
+      const fragment = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: prop.debrisColor, transparent: true }));
+      fragment.position.copy(impact).addScaledVector(force, 0.42).add(new THREE.Vector3((this.random() - 0.5) * prop.radius, this.random() * Math.min(prop.height, 1.6), (this.random() - 0.5) * prop.radius));
+      fragment.rotation.set(this.random() * Math.PI, this.random() * Math.PI, this.random() * Math.PI);
+      this.scene.add(fragment);
+      const life = 0.72 + this.random() * 0.72;
+      this.particles.push({
+        mesh: fragment,
+        velocity: force.clone().multiplyScalar(2.2 + this.random() * 4.4).add(new THREE.Vector3((this.random() - 0.5) * 4.8, 2.2 + this.random() * 4.8, (this.random() - 0.5) * 4.8)),
+        life,
+        maxLife: life,
+        gravity: prop.surface === 'stone' ? 9.8 : 7.8,
+        drag: 0.24,
+        spin: new THREE.Vector3(4 + this.random() * 9, 4 + this.random() * 9, 4 + this.random() * 9),
+      });
+    }
   }
 
   private damageActor(target: Actor, rawDamage: number, attacker: Actor): void {
@@ -1336,6 +1607,7 @@ export class SiegeGame {
   private updateProjectiles(delta: number): void {
     for (let index = this.projectiles.length - 1; index >= 0; index -= 1) {
       const projectile = this.projectiles[index];
+      const previousPosition = projectile.mesh.position.clone();
       projectile.life -= delta;
       if (projectile.fire) {
         projectile.velocity.y -= 9.8 * delta;
@@ -1348,6 +1620,22 @@ export class SiegeGame {
       projectile.mesh.position.addScaledVector(projectile.velocity, delta);
       if (!projectile.fire) projectile.mesh.quaternion.setFromUnitVectors(UP, projectile.velocity.clone().normalize());
       let remove = projectile.life <= 0;
+      for (const prop of this.destructibles) {
+        if (remove || prop.destroyed || !segmentHitsObstacle(previousPosition, projectile.mesh.position, {
+          x: prop.root.position.x,
+          y: prop.root.position.y + prop.centerOffsetY,
+          z: prop.root.position.z,
+          radius: prop.radius,
+          height: prop.height,
+        }, projectile.fire ? 0.48 : 0.12)) continue;
+        if (projectile.fire) {
+          this.damageDestructible(prop, prop.maxHealth + 1, projectile.mesh.position, projectile.velocity.clone().normalize());
+          this.explode(projectile.mesh.position, projectile.team, 5, 46, prop.surface);
+        } else {
+          this.damageDestructible(prop, projectile.damage * 1.45, projectile.mesh.position, projectile.velocity.clone().normalize());
+        }
+        remove = true;
+      }
       for (const explosive of this.explosives) {
         if (remove || !explosive.armed) continue;
         if (projectile.mesh.position.distanceTo(explosive.group.position.clone().add(new THREE.Vector3(0, 0.65, 0))) < explosive.triggerRadius) {
@@ -1404,6 +1692,21 @@ export class SiegeGame {
         this.damageActor(actor, (1 - distance / radius) * damage, attacker);
       }
     }
+    for (const prop of this.destructibles) {
+      if (prop.destroyed) continue;
+      const edgeDistance = Math.max(0, distanceXZ(prop.root.position, position) - prop.radius * 0.55);
+      const propDamage = radialDestructibleDamage(edgeDistance, radius, damage * 1.75);
+      if (propDamage <= 0) continue;
+      const force = new THREE.Vector3(prop.root.position.x - position.x, 0.3, prop.root.position.z - position.z);
+      if (force.lengthSq() < 0.01) force.set(0, 1, 0);
+      else force.normalize();
+      const impact = new THREE.Vector3(prop.root.position.x, prop.root.position.y + Math.min(prop.centerOffsetY, 1.25), prop.root.position.z);
+      this.damageDestructible(prop, propDamage, impact, force);
+    }
+    for (const explosive of this.explosives) {
+      if (!explosive.armed || distanceXZ(explosive.group.position, position) > radius * 0.84) continue;
+      window.setTimeout(() => this.detonateExplosive(explosive, sourceTeam), 70 + this.random() * 120);
+    }
   }
 
   private updateExplosives(time: number): void {
@@ -1423,10 +1726,6 @@ export class SiegeGame {
     explosive.group.visible = false;
     const origin = explosive.group.position.clone().add(new THREE.Vector3(0, explosive.kind === 'barrel' ? 0.7 : 0.18, 0));
     this.explode(origin, sourceTeam, explosive.blastRadius, explosive.damage, explosive.kind === 'barrel' ? 'wood' : battlefieldSurfaceAt(origin.x, origin.z));
-    for (const other of this.explosives) {
-      if (!other.armed || other === explosive || distanceXZ(other.group.position, origin) > explosive.blastRadius * 0.82) continue;
-      window.setTimeout(() => this.detonateExplosive(other, sourceTeam), 90 + this.random() * 130);
-    }
   }
 
   private cannonHitsStone(position: THREE.Vector3): boolean {
@@ -1696,6 +1995,33 @@ export class SiegeGame {
       position.x = clamp(position.x, -5.4, 5.4);
     } else if (position.z < CASTLE_LIMITS.secondStairEndZ) {
       position.x = clamp(position.x, -11.5, 11.5);
+    }
+  }
+
+  private resolveDestructibleCollision(position: THREE.Vector3): void {
+    const actorRadius = 0.56;
+    const contact = { x: position.x, y: position.y + 0.82, z: position.z };
+    for (const prop of this.destructibles) {
+      if (prop.destroyed || !pointHitsObstacle(contact, {
+        x: prop.root.position.x,
+        y: prop.root.position.y + prop.centerOffsetY,
+        z: prop.root.position.z,
+        radius: prop.radius,
+        height: prop.height,
+      }, actorRadius)) continue;
+      const dx = position.x - prop.root.position.x;
+      const dz = position.z - prop.root.position.z;
+      const distance = Math.hypot(dx, dz);
+      const minimumDistance = prop.radius + actorRadius;
+      if (distance >= minimumDistance) continue;
+      if (distance < 0.001) {
+        position.x = prop.root.position.x + minimumDistance;
+      } else {
+        position.x = prop.root.position.x + dx / distance * minimumDistance;
+        position.z = prop.root.position.z + dz / distance * minimumDistance;
+      }
+      contact.x = position.x;
+      contact.z = position.z;
     }
   }
 

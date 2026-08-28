@@ -12,6 +12,19 @@ import {
   type ShopItem,
 } from './game/economy';
 import { SiegeGame, type HudState } from './game/game';
+import {
+  HEROES,
+  calculateHeroReward,
+  getHero,
+  grantHeroReward,
+  loadHeroProgress,
+  masteryLevel,
+  saveHeroProgress,
+  selectHero,
+  unlockHero,
+  type HeroId,
+  type HeroReward,
+} from './game/heroes';
 import { LEVELS, getLevel, getNextLevel, type LevelDefinition, type LevelId } from './game/levels';
 import { mobileCameraDrag, normalizeMobileJoystick } from './game/mobileControls';
 import { preloadKnightAssets } from './game/models';
@@ -29,6 +42,7 @@ const landing = element('#landing');
 const lobby = element('#lobby');
 const mapSelect = element('#map-select');
 const briefing = element('#briefing');
+const heroSelect = element('#hero-select');
 const pause = element('#pause');
 const ending = element('#ending');
 const shop = element('#shop');
@@ -51,6 +65,8 @@ const currentLevel = getLevel(requestedLevel ?? campaign.selected);
 campaign = { ...campaign, selected: currentLevel.id };
 saveCampaignProgress(campaign);
 let settings = loadGameSettings();
+let heroProgress = loadHeroProgress();
+let highlightedHeroId: HeroId = heroProgress.selectedHeroId;
 volumeInput.value = String(Math.round(settings.volume * 100));
 qualitySelect.value = settings.quality;
 let multiplayer = false;
@@ -83,7 +99,8 @@ const game = new SiegeGame(canvas, {
     mobileControls.classList.remove('game-active');
     element('#ending-eyebrow').textContent = currentLevel.endingEyebrow;
     element('#ending-title').textContent = currentLevel.endingTitle;
-    element('#ending-stats').innerHTML = `Врагов повержено: <b>${stats.kills}</b><br>Нанесено урона: <b>${Math.round(stats.damage)}</b><br>Время штурма: <b>${formatTime(stats.duration)}</b>`;
+    const reward = awardHeroProgress(stats.heroId, true, stats.kills, stats.damage);
+    element('#ending-stats').innerHTML = `Герой: <b>${getHero(stats.heroId).name}</b> · уровень боя: <b>${stats.matchLevel}</b><br>Врагов повержено: <b>${stats.kills}</b> · нанесено урона: <b>${Math.round(stats.damage)}</b><br>Время штурма: <b>${formatTime(stats.duration)}</b><br><span class="ending-reward">Награда: +${reward.crowns} 👑 · +${reward.masteryXp} мастерства</span>`;
     const next = getNextLevel(currentLevel);
     const nextButton = element<HTMLButtonElement>('#next-level');
     nextButton.classList.toggle('hidden', !next);
@@ -96,7 +113,8 @@ const game = new SiegeGame(canvas, {
     mobileControls.classList.remove('game-active');
     element('#ending-eyebrow').textContent = 'НАША ЦИТАДЕЛЬ ПАЛА';
     element('#ending-title').textContent = 'Красный фронт прорвался';
-    element('#ending-stats').innerHTML = `Врагов повержено: <b>${stats.kills}</b><br>Нанесено урона: <b>${Math.round(stats.damage)}</b><br>Время обороны: <b>${formatTime(stats.duration)}</b>`;
+    const reward = awardHeroProgress(stats.heroId, false, stats.kills, stats.damage);
+    element('#ending-stats').innerHTML = `Герой: <b>${getHero(stats.heroId).name}</b> · уровень боя: <b>${stats.matchLevel}</b><br>Врагов повержено: <b>${stats.kills}</b> · нанесено урона: <b>${Math.round(stats.damage)}</b><br>Время обороны: <b>${formatTime(stats.duration)}</b><br><span class="ending-reward">Награда за оборону: +${reward.crowns} 👑 · +${reward.masteryXp} мастерства</span>`;
     element<HTMLButtonElement>('#next-level').classList.add('hidden');
     ending.classList.add('active');
   },
@@ -108,12 +126,14 @@ const game = new SiegeGame(canvas, {
   onNetworkState: (state) => network.sendPlayer(state),
   onBattleEvent: (type, value) => network.sendBattleEvent(type, value),
 }, currentLevel);
+game.setHero(heroProgress.selectedHeroId);
 game.setVolume(settings.volume);
 game.setQuality(settings.quality);
 if (import.meta.env.DEV) Object.assign(window, { __smiteGame: game, __smiteLevel: currentLevel, __smiteCampaign: campaign });
 
 renderLevelUi();
 renderLevelCards();
+renderHeroSelect();
 if (new URLSearchParams(location.search).get('briefing') === '1') showBriefing();
 
 const minimumLoadingTime = new Promise<void>((resolve) => window.setTimeout(resolve, 700));
@@ -169,6 +189,22 @@ element<HTMLButtonElement>('#join-room').addEventListener('click', async () => {
 
 element<HTMLButtonElement>('#deploy').addEventListener('click', () => {
   briefing.classList.remove('active');
+  highlightedHeroId = heroProgress.selectedHeroId;
+  renderHeroSelect();
+  heroSelect.classList.add('active');
+});
+
+element<HTMLButtonElement>('#hero-select-back').addEventListener('click', () => {
+  heroSelect.classList.remove('active');
+  briefing.classList.add('active');
+});
+
+element<HTMLButtonElement>('#hero-deploy').addEventListener('click', () => {
+  if (!heroProgress.unlockedHeroIds.includes(highlightedHeroId)) return;
+  heroProgress = selectHero(heroProgress, highlightedHeroId);
+  saveHeroProgress(heroProgress);
+  game.setHero(heroProgress.selectedHeroId);
+  heroSelect.classList.remove('active');
   hud.classList.remove('hidden');
   if (multiplayer) {
     roomBadge.classList.remove('hidden');
@@ -279,9 +315,13 @@ bindHoldControl('#mobile-interact', (held) => game.setInteract(held));
 element('#mobile-dodge').addEventListener('pointerdown', (event) => { event.preventDefault(); game.dodge(); });
 element('#mobile-shop').addEventListener('pointerdown', (event) => { event.preventDefault(); openShop(); });
 element('#mobile-potion').addEventListener('pointerdown', (event) => { event.preventDefault(); usePotion(); });
+element('#mobile-ability').addEventListener('pointerdown', (event) => { event.preventDefault(); game.useHeroAbility('ability'); });
+element('#mobile-ultimate').addEventListener('pointerdown', (event) => { event.preventDefault(); game.useHeroAbility('ultimate'); });
 element('#mobile-camera').addEventListener('pointerdown', (event) => { event.preventDefault(); game.switchCameraShoulder(); });
 element('#shop-toggle').addEventListener('click', () => openShop());
 element('#potion-quick').addEventListener('click', () => usePotion());
+element('#ability-toggle').addEventListener('click', () => game.useHeroAbility('ability'));
+element('#ultimate-toggle').addEventListener('click', () => game.useHeroAbility('ultimate'));
 element('#shop-close').addEventListener('click', () => closeShop());
 
 const mobileLook = element('#mobile-look');
@@ -346,7 +386,115 @@ function showBriefing(): void {
   landing.classList.remove('active');
   lobby.classList.remove('active');
   mapSelect.classList.remove('active');
+  heroSelect.classList.remove('active');
   briefing.classList.add('active');
+}
+
+function renderHeroSelect(): void {
+  element('#hero-crowns').textContent = String(heroProgress.crowns);
+  const cards = HEROES.map((hero) => {
+    const unlocked = heroProgress.unlockedHeroIds.includes(hero.id);
+    const selected = highlightedHeroId === hero.id;
+    const card = document.createElement('article');
+    card.className = `hero-card${selected ? ' selected' : ''}${unlocked ? ' unlocked' : ' locked'}`;
+    card.style.setProperty('--hero-color', colorHex(hero.accent));
+    card.tabIndex = 0;
+    card.setAttribute('role', 'button');
+    card.setAttribute('aria-label', `${hero.name}, ${hero.className}${unlocked ? '' : `, открыть за ${hero.unlockCost} корон`}`);
+
+    const top = document.createElement('div');
+    top.className = 'hero-card-top';
+    const icon = document.createElement('span');
+    icon.textContent = hero.icon;
+    const heading = document.createElement('div');
+    const className = document.createElement('small');
+    className.textContent = hero.className;
+    const name = document.createElement('h3');
+    name.textContent = hero.name;
+    heading.append(className, name);
+    top.append(icon, heading);
+
+    const description = document.createElement('p');
+    description.textContent = hero.description;
+    const mastery = document.createElement('div');
+    mastery.className = 'hero-card-mastery';
+    mastery.textContent = `МАСТЕРСТВО ${masteryLevel(heroProgress.masteryXp[hero.id] ?? 0)}`;
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.className = 'hero-unlock';
+    action.disabled = unlocked;
+    action.textContent = unlocked ? selected ? 'ВЫБРАН' : 'ДОСТУПЕН' : `ОТКРЫТЬ · ${hero.unlockCost} 👑`;
+    action.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (unlocked) return;
+      const result = unlockHero(heroProgress, hero.id);
+      heroProgress = result.progress;
+      if (result.ok) highlightedHeroId = hero.id;
+      saveHeroProgress(heroProgress);
+      renderHeroSelect();
+      const status = element('#hero-status');
+      status.textContent = result.message;
+      status.className = `hero-status ${result.ok ? 'success' : 'error'}`;
+    });
+    card.append(top, description, mastery, action);
+
+    const choose = (): void => {
+      highlightedHeroId = hero.id;
+      if (unlocked) {
+        heroProgress = selectHero(heroProgress, hero.id);
+        saveHeroProgress(heroProgress);
+      }
+      renderHeroSelect();
+    };
+    card.addEventListener('click', choose);
+    card.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        choose();
+      }
+    });
+    return card;
+  });
+  element('#hero-grid').replaceChildren(...cards);
+
+  const hero = getHero(highlightedHeroId);
+  const unlocked = heroProgress.unlockedHeroIds.includes(hero.id);
+  const stats = [
+    ['ЗДОРОВЬЕ', signed(hero.stats.maxHealth)],
+    ['УРОН', signed(hero.stats.attackDamage)],
+    ['СКОРОСТЬ', signed(hero.stats.moveSpeed, 2)],
+    ['ЗАЩИТА', `${Math.round(hero.stats.damageReduction * 100)}%`],
+    ['ВАМПИРИЗМ', `${Math.round(hero.stats.lifesteal * 100)}%`],
+    ['РЕГЕНЕРАЦИЯ', signed(hero.stats.healthRegen, 1)],
+  ];
+  const masteryXp = heroProgress.masteryXp[hero.id] ?? 0;
+  element('#hero-detail').innerHTML = `
+    <div class="hero-detail-portrait" style="--hero-color:${colorHex(hero.accent)}"><span>${hero.icon}</span><small>${hero.className}</small><h3>${hero.name}</h3><p>${hero.title}</p></div>
+    <p class="hero-passive"><b>ПАССИВНОЕ</b>${hero.passive}</p>
+    <div class="hero-stats">${stats.map(([label, value]) => `<span>${label}<b>${value}</b></span>`).join('')}</div>
+    <div class="hero-skill"><span>${hero.ability.icon}</span><div><small>Q · ${hero.ability.cooldown} СЕК</small><b>${hero.ability.name}</b><p>${hero.ability.description}</p></div></div>
+    <div class="hero-skill ultimate"><span>${hero.ultimate.icon}</span><div><small>R · УЛЬТИМЕЙТ · ${hero.ultimate.cooldown} СЕК</small><b>${hero.ultimate.name}</b><p>${hero.ultimate.description}</p></div></div>
+    <div class="hero-mastery">МАСТЕРСТВО <b>${masteryLevel(masteryXp)}</b><span>${masteryXp} XP</span></div>`;
+  const deploy = element<HTMLButtonElement>('#hero-deploy');
+  deploy.disabled = !unlocked;
+  element('#hero-deploy-name').textContent = unlocked ? `${hero.name} · ${hero.className}` : `Нужно открыть за ${hero.unlockCost} корон`;
+  element('#hero-status').className = 'hero-status';
+  element('#hero-status').textContent = unlocked
+    ? `${hero.name} готов к бою. Умение доступно сразу, ультимейт — с 3 уровня матча.`
+    : `${hero.name} пока закрыт. Заработайте ${hero.unlockCost} корон в боях или откройте сейчас.`;
+}
+
+function signed(value: number, precision = 0): string {
+  if (value === 0) return '—';
+  return `${value > 0 ? '+' : ''}${value.toFixed(precision)}`;
+}
+
+function awardHeroProgress(heroId: HeroId, victory: boolean, kills: number, damage: number): HeroReward {
+  const reward = calculateHeroReward(victory, kills, damage);
+  heroProgress = grantHeroReward(heroProgress, heroId, reward);
+  saveHeroProgress(heroProgress);
+  renderHeroSelect();
+  return reward;
 }
 
 function showPause(): void { pause.classList.add('active'); }
@@ -448,6 +596,15 @@ function colorHex(color: number): string {
 }
 
 function updateHud(state: HudState): void {
+  const hero = getHero(state.heroId);
+  const heroColor = colorHex(state.heroAccent);
+  element<HTMLElement>('.bars').style.setProperty('--hero-color', heroColor);
+  element<HTMLElement>('#ability-bar').style.setProperty('--hero-color', heroColor);
+  element('#combat-hero-icon').textContent = state.heroIcon;
+  element('#combat-hero-name').textContent = state.heroName;
+  element('#match-level').textContent = String(state.matchLevel);
+  element('#hero-xp-fill').style.width = `${state.matchXpNext > 0 ? state.matchXp / state.matchXpNext * 100 : 100}%`;
+  element('#hero-xp-text').textContent = state.matchLevel >= 20 ? 'МАКС. УРОВЕНЬ' : `${state.matchXp} / ${state.matchXpNext} XP`;
   element('#health-fill').style.width = `${state.health / state.maxHealth * 100}%`;
   element('#health-text').textContent = String(Math.ceil(state.health));
   element('#stamina-fill').style.width = `${state.stamina}%`;
@@ -459,6 +616,20 @@ function updateHud(state: HudState): void {
   element('#gold-count').textContent = String(state.gold);
   element('#gold-rate').textContent = String(state.goldPerSecond);
   element('#potion-count').textContent = String(inventoryItemCount(state.inventory, 'healing-potion'));
+  element('#ability-icon').textContent = state.abilityIcon;
+  element('#ability-name').textContent = state.abilityName;
+  element('#ability-state').textContent = state.abilityCooldown > 0 ? `${Math.ceil(state.abilityCooldown)} СЕК` : 'ГОТОВО';
+  element('#ability-cooldown-fill').style.width = `${state.abilityCooldown / hero.ability.cooldown * 100}%`;
+  element('#ability-toggle').classList.toggle('cooldown', state.abilityCooldown > 0);
+  element('#ultimate-icon').textContent = state.ultimateIcon;
+  element('#ultimate-name').textContent = state.ultimateName;
+  element('#ultimate-state').textContent = !state.ultimateUnlocked ? 'ОТКРОЕТСЯ НА УРОВНЕ 3' : state.ultimateCooldown > 0 ? `${Math.ceil(state.ultimateCooldown)} СЕК` : 'ГОТОВО';
+  element('#ultimate-cooldown-fill').style.width = `${state.ultimateCooldown / hero.ultimate.cooldown * 100}%`;
+  element('#ultimate-toggle').classList.toggle('locked', !state.ultimateUnlocked);
+  element('#ultimate-toggle').classList.toggle('cooldown', state.ultimateCooldown > 0);
+  element('#mobile-ability').textContent = `${state.abilityIcon} Q`;
+  element('#mobile-ultimate').textContent = `${state.ultimateIcon} R`;
+  element('#mobile-ultimate').classList.toggle('locked', !state.ultimateUnlocked);
   renderInventory(state.inventory);
   const signatureItem = state.inventory.find((slot) => getShopItem(slot.itemId).tier === 'unique');
   element('#weapon-name').textContent = signatureItem ? getShopItem(signatureItem.itemId).name : 'Меч пепла';

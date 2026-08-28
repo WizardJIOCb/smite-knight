@@ -47,6 +47,7 @@ import {
   type PlayerItemStats,
 } from './economy';
 import { mountGeneratedLevelProps } from './generatedProps';
+import { getHero, killExperience, matchXpThreshold, type HeroAbility, type HeroDefinition, type HeroId } from './heroes';
 import { LEVELS, type LevelDefinition } from './levels';
 import { KnightRig, createRemoteKnight, type RigAction } from './models';
 import {
@@ -89,12 +90,29 @@ export interface HudState {
   goldPerSecond: number;
   inventory: readonly InventorySlot[];
   itemStats: PlayerItemStats;
+  heroId: HeroId;
+  heroName: string;
+  heroIcon: string;
+  heroAccent: number;
+  matchLevel: number;
+  matchXp: number;
+  matchXpNext: number;
+  abilityName: string;
+  abilityIcon: string;
+  abilityCooldown: number;
+  ultimateName: string;
+  ultimateIcon: string;
+  ultimateCooldown: number;
+  ultimateUnlocked: boolean;
 }
 
 export interface GameStats {
   kills: number;
   duration: number;
   damage: number;
+  heroId: HeroId;
+  matchLevel: number;
+  matchXp: number;
 }
 
 export interface GameEvents {
@@ -256,6 +274,20 @@ export class SiegeGame {
   private damageDone = 0;
   private economy: EconomyState = createEconomyState();
   private playerItemStats: PlayerItemStats = getInventoryStats([]);
+  private hero: HeroDefinition = getHero('aegis');
+  private matchLevel = 1;
+  private matchXp = 0;
+  private heroAbilityCooldown = 0;
+  private heroUltimateCooldown = 0;
+  private heroBuffTimer = 0;
+  private heroDamageBuff = 0;
+  private heroDefenseBuff = 0;
+  private heroSpeedBuff = 0;
+  private heroRegenBuff = 0;
+  private heroAuraTimer = 0;
+  private heroAuraTick = 0;
+  private heroAuraRadius = 0;
+  private heroAuraDamage = 0;
   private ramStrikeTimer = 0;
   private ramVelocityZ = 0;
   private allyCitadelHealth = CITADEL_MAX_HEALTH;
@@ -358,6 +390,7 @@ export class SiegeGame {
     this.damageDone = 0;
     this.economy = createEconomyState();
     this.playerItemStats = getInventoryStats([]);
+    this.resetHeroMatchProgress();
     this.elapsed = 0;
     this.respawnTimer = 0;
     this.jumpTimer = 0;
@@ -420,6 +453,34 @@ export class SiegeGame {
   switchCameraShoulder(): void { this.cameraShoulder *= -1; }
   dodge(): void { this.playerDodge(); }
   isRunning(): boolean { return this.mode === 'running'; }
+
+  setHero(heroId: HeroId): void {
+    this.hero = getHero(heroId);
+    this.resetHeroMatchProgress();
+    if (this.player) {
+      this.applyPlayerItemStats();
+      this.applyHeroVisual();
+      this.emitHud(true);
+    }
+  }
+
+  useHeroAbility(slot: 'ability' | 'ultimate'): boolean {
+    if (this.mode !== 'running' || this.player.dead) return false;
+    const ultimate = slot === 'ultimate';
+    if (ultimate && this.matchLevel < 3) {
+      this.events.onFeed('<b>Ультимейт откроется на 3 уровне.</b> Побеждайте врагов и набирайте опыт.');
+      return false;
+    }
+    const cooldown = ultimate ? this.heroUltimateCooldown : this.heroAbilityCooldown;
+    if (cooldown > 0) return false;
+    const ability = ultimate ? this.hero.ultimate : this.hero.ability;
+    if (ultimate) this.heroUltimateCooldown = ability.cooldown;
+    else this.heroAbilityCooldown = ability.cooldown;
+    this.executeHeroAbility(ability, ultimate);
+    this.events.onFeed(`<b>${this.hero.name}: ${ability.name}</b>${ultimate ? ' · УЛЬТИМЕЙТ' : ''}`);
+    this.emitHud(true);
+    return true;
+  }
 
   getEconomyState(): EconomyState {
     return { ...this.economy, inventory: this.economy.inventory.map((slot) => ({ ...slot })) };
@@ -1459,6 +1520,8 @@ export class SiegeGame {
     this.boss.rig.root.visible = false;
     this.boss.dead = false;
     this.decorateBoss();
+    this.applyPlayerItemStats();
+    this.applyHeroVisual();
     this.emitHud(true);
   }
 
@@ -1484,6 +1547,8 @@ export class SiegeGame {
     this.events.onFeed(this.isOpenCitadelFront
       ? '<b>Армии вышли в открытое поле.</b> Линия фронта формируется без заданных путей.'
       : '<b>Шесть фронтов открыты.</b> Первая волна вышла из обеих цитаделей.');
+    this.applyPlayerItemStats();
+    this.applyHeroVisual();
     this.emitHud(true);
   }
 
@@ -1610,6 +1675,8 @@ export class SiegeGame {
     window.addEventListener('keydown', (event) => {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
       if (event.code === 'KeyC') this.cameraShoulder *= -1;
+      if (event.code === 'KeyQ' && !event.repeat) this.useHeroAbility('ability');
+      if (event.code === 'KeyR' && !event.repeat) this.useHeroAbility('ultimate');
       if (event.code === 'Space') {
         event.preventDefault();
         this.playerDodge();
@@ -1692,6 +1759,7 @@ export class SiegeGame {
   private updateGame(time: number, delta: number): void {
     this.elapsed += delta;
     this.economy = advanceEconomy(this.economy, delta);
+    this.updateHeroEffects(delta);
     this.updatePlayer(delta);
     this.updateObjectives(delta);
     this.updateActors(time, delta);
@@ -1719,8 +1787,9 @@ export class SiegeGame {
 
   private updatePlayer(delta: number): void {
     if (this.player.dead) return;
-    if (this.playerItemStats.healthRegen > 0) {
-      this.player.health = Math.min(this.player.maxHealth, this.player.health + this.playerItemStats.healthRegen * delta);
+    const healthRegen = this.playerItemStats.healthRegen + this.hero.stats.healthRegen + this.heroRegenBuff;
+    if (healthRegen > 0) {
+      this.player.health = Math.min(this.player.maxHealth, this.player.health + healthRegen * delta);
     }
     this.player.cooldown = Math.max(0, this.player.cooldown - delta);
     this.player.actionTime += delta;
@@ -2393,7 +2462,10 @@ export class SiegeGame {
         this.audio.block();
       }
     }
-    if (target === this.player) damage *= 1 - this.playerItemStats.damageReduction;
+    if (target === this.player) {
+      const reduction = clamp(this.playerItemStats.damageReduction + this.hero.stats.damageReduction + this.heroDefenseBuff, 0, 0.72);
+      damage *= 1 - reduction;
+    }
     const appliedDamage = Math.min(target.health, damage);
     target.health = Math.max(0, target.health - appliedDamage);
     target.lastAttacker = attacker;
@@ -2409,8 +2481,9 @@ export class SiegeGame {
     if (!blocked && kind !== 'explosion') this.audio.hit(target.role === 'boss' || target.role === 'brute');
     if (attacker === this.player) {
       this.damageDone += appliedDamage;
-      if (this.playerItemStats.lifesteal > 0 && !this.player.dead) {
-        this.player.health = Math.min(this.player.maxHealth, this.player.health + appliedDamage * this.playerItemStats.lifesteal);
+      const lifesteal = this.playerItemStats.lifesteal + this.hero.stats.lifesteal;
+      if (lifesteal > 0 && !this.player.dead) {
+        this.player.health = Math.min(this.player.maxHealth, this.player.health + appliedDamage * lifesteal);
       }
       if (kind === 'melee') this.cameraShake = Math.max(this.cameraShake, blocked ? 0.1 : 0.16);
     }
@@ -2429,8 +2502,10 @@ export class SiegeGame {
     if (attacker === this.player) {
       this.kills += 1;
       const bounty = killBounty(target.role);
+      const experience = killExperience(target.role);
       this.economy = grantGold(this.economy, bounty);
-      this.events.onFeed(`<b>${target.role === 'boss' ? `${this.level.boss.title} ${this.level.boss.name} повержен` : 'Страж повержен'}</b> · +${bounty} золота`);
+      this.grantMatchExperience(experience);
+      this.events.onFeed(`<b>${target.role === 'boss' ? `${this.level.boss.title} ${this.level.boss.name} повержен` : 'Страж повержен'}</b> · +${bounty} золота · +${experience} опыта`);
     }
     if (target === this.player) {
       this.jumpTimer = 0;
@@ -3139,6 +3214,158 @@ export class SiegeGame {
     }
   }
 
+  private resetHeroMatchProgress(): void {
+    this.matchLevel = 1;
+    this.matchXp = 0;
+    this.heroAbilityCooldown = 0;
+    this.heroUltimateCooldown = 0;
+    this.heroBuffTimer = 0;
+    this.heroDamageBuff = 0;
+    this.heroDefenseBuff = 0;
+    this.heroSpeedBuff = 0;
+    this.heroRegenBuff = 0;
+    this.heroAuraTimer = 0;
+    this.heroAuraTick = 0;
+    this.heroAuraRadius = 0;
+    this.heroAuraDamage = 0;
+  }
+
+  private grantMatchExperience(amount: number): void {
+    if (amount <= 0 || this.matchLevel >= 20) return;
+    this.matchXp += amount;
+    while (this.matchLevel < 20 && this.matchXp >= matchXpThreshold(this.matchLevel)) {
+      this.matchXp -= matchXpThreshold(this.matchLevel);
+      this.matchLevel += 1;
+      this.applyPlayerItemStats();
+      this.player.health = Math.min(this.player.maxHealth, this.player.health + 28);
+      this.spawnHeroPulse(this.player.rig.root.position, this.hero.accent, 1.3);
+      this.events.onFeed(`<b>${this.hero.name} получает ${this.matchLevel} уровень.</b>${this.matchLevel === 3 ? ' Ультимейт разблокирован!' : ' Урон и здоровье увеличены.'}`);
+    }
+    if (this.matchLevel >= 20) this.matchXp = 0;
+  }
+
+  private updateHeroEffects(delta: number): void {
+    this.heroAbilityCooldown = Math.max(0, this.heroAbilityCooldown - delta);
+    this.heroUltimateCooldown = Math.max(0, this.heroUltimateCooldown - delta);
+    if (this.heroBuffTimer > 0) {
+      this.heroBuffTimer = Math.max(0, this.heroBuffTimer - delta);
+      if (this.heroBuffTimer === 0) {
+        this.heroDamageBuff = 0;
+        this.heroDefenseBuff = 0;
+        this.heroSpeedBuff = 0;
+        this.heroRegenBuff = 0;
+        this.applyPlayerItemStats();
+      }
+    }
+    if (this.heroAuraTimer <= 0) return;
+    this.heroAuraTimer = Math.max(0, this.heroAuraTimer - delta);
+    this.heroAuraTick -= delta;
+    if (!this.player.dead && this.heroAuraTick <= 0) {
+      this.heroAuraTick = 0.5;
+      this.heroAreaDamage(this.player.rig.root.position, this.heroAuraRadius, this.heroAuraDamage, this.hero.accent);
+    }
+    if (this.heroAuraTimer === 0) {
+      this.heroAuraDamage = 0;
+      this.heroAuraRadius = 0;
+    }
+  }
+
+  private executeHeroAbility(ability: HeroAbility, ultimate: boolean): void {
+    const origin = this.player.rig.root.position.clone();
+    if (ability.effect === 'dash') {
+      const distance = ability.distance ?? 6;
+      const direction = new THREE.Vector3(Math.sin(this.player.rig.root.rotation.y), 0, Math.cos(this.player.rig.root.rotation.y));
+      this.player.rig.root.position.addScaledVector(direction, distance);
+      this.resolveWorldCollision(this.player.rig.root.position);
+      this.resolveRamCollision(this.player.rig.root.position);
+      this.resolveDestructibleCollision(this.player.rig.root.position);
+      this.syncActorGround(this.player, 0.016);
+      this.heroAreaDamage(this.player.rig.root.position, ability.radius ?? 4, ability.damage ?? 0, this.hero.accent);
+      this.spawnHeroPulse(origin, this.hero.accent, 0.72);
+    } else if (ability.effect === 'burst') {
+      this.heroAreaDamage(origin, ability.radius ?? 6, ability.damage ?? 0, this.hero.accent);
+    } else if (ability.effect === 'siphon') {
+      const dealt = this.heroAreaDamage(origin, ability.radius ?? 6, ability.damage ?? 0, this.hero.accent);
+      const heal = (ability.heal ?? 0) + dealt * 0.12;
+      this.player.health = Math.min(this.player.maxHealth, this.player.health + heal);
+    } else if (ability.effect === 'heal') {
+      this.player.health = Math.min(this.player.maxHealth, this.player.health + (ability.heal ?? 0));
+      this.spawnHeroPulse(origin, this.hero.accent, 0.92);
+    } else if (ability.effect === 'aura') {
+      this.heroAuraTimer = ability.duration ?? 8;
+      this.heroAuraTick = 0;
+      this.heroAuraRadius = ability.radius ?? 7;
+      this.heroAuraDamage = ability.auraDamage ?? ability.damage ?? 18;
+      this.spawnHeroPulse(origin, this.hero.accent, 1.12);
+    } else {
+      this.spawnHeroPulse(origin, this.hero.accent, 0.85);
+    }
+    if (ability.duration || ability.damageBuff || ability.defenseBuff || ability.speedBuff || ability.regen) this.applyTimedHeroBuff(ability);
+    if (ultimate) this.cameraShake = Math.max(this.cameraShake, 0.62);
+  }
+
+  private applyTimedHeroBuff(ability: HeroAbility): void {
+    this.heroBuffTimer = Math.max(this.heroBuffTimer, ability.duration ?? 0);
+    this.heroDamageBuff = Math.max(this.heroDamageBuff, ability.damageBuff ?? 0);
+    this.heroDefenseBuff = Math.max(this.heroDefenseBuff, ability.defenseBuff ?? 0);
+    this.heroSpeedBuff = Math.max(this.heroSpeedBuff, ability.speedBuff ?? 0);
+    this.heroRegenBuff = Math.max(this.heroRegenBuff, ability.regen ?? 0);
+    this.applyPlayerItemStats();
+  }
+
+  private heroAreaDamage(origin: THREE.Vector3, radius: number, damage: number, color: number): number {
+    if (damage <= 0) return 0;
+    let total = 0;
+    for (const actor of this.actors) {
+      if (actor.dead || actor.team === this.player.team || actor === this.boss && this.phase < 3) continue;
+      const distance = distanceXZ(actor.rig.root.position, origin);
+      if (distance > radius) continue;
+      const before = actor.health;
+      const falloff = 0.68 + (1 - distance / radius) * 0.32;
+      this.damageActor(actor, damage * falloff, this.player, 'explosion');
+      total += Math.max(0, before - actor.health);
+    }
+    this.spawnHeroPulse(origin, color, clamp(radius / 6, 0.75, 1.8));
+    this.spawnImpact(origin.clone().add(new THREE.Vector3(0, 0.25, 0)), color, Math.min(20, 7 + Math.round(radius)));
+    this.cameraShake = Math.max(this.cameraShake, clamp(damage / 280, 0.12, 0.55));
+    return total;
+  }
+
+  private spawnHeroPulse(position: THREE.Vector3, color: number, scale: number): void {
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.85, 0.055, 7, 34),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.88, depthWrite: false, blending: THREE.AdditiveBlending }),
+    );
+    ring.position.copy(position).add(new THREE.Vector3(0, 0.14, 0));
+    ring.rotation.x = Math.PI / 2;
+    ring.scale.setScalar(scale);
+    this.scene.add(ring);
+    this.particles.push({ mesh: ring, velocity: new THREE.Vector3(0, 0.24, 0), life: 0.58, maxLife: 0.58, gravity: 0, growth: 4.2 });
+  }
+
+  private applyHeroVisual(): void {
+    const previous = this.player.rig.root.getObjectByName('player-hero-signature');
+    if (previous) this.player.rig.root.remove(previous);
+    const signature = new THREE.Group();
+    signature.name = 'player-hero-signature';
+    const glow = new THREE.MeshStandardMaterial({
+      color: this.hero.accent,
+      emissive: this.hero.accent,
+      emissiveIntensity: 1.3,
+      transparent: true,
+      opacity: 0.76,
+      roughness: 0.28,
+      metalness: 0.45,
+    });
+    const aura = new THREE.Mesh(new THREE.TorusGeometry(0.72, 0.035, 6, 28), glow);
+    aura.rotation.x = Math.PI / 2;
+    aura.position.y = 0.07;
+    const crest = new THREE.Mesh(new THREE.OctahedronGeometry(0.12, 0), glow.clone());
+    crest.position.set(0, 2.52, -0.28);
+    signature.add(aura, crest);
+    this.player.rig.root.add(signature);
+  }
+
   private emitHud(force = false): void {
     if (!force && this.elapsed - this.lastHud < 0.08) return;
     this.lastHud = this.elapsed;
@@ -3159,6 +3386,7 @@ export class SiegeGame {
         allyCitadelHealth: this.allyCitadelHealth,
         enemyCitadelHealth: this.enemyCitadelHealth,
         citadelWave: this.citadelWave,
+        ...this.heroHudState(),
         ...this.economyHudState(),
       });
       return;
@@ -3190,6 +3418,7 @@ export class SiegeGame {
       allies: livingAllies,
       enemies: this.actors.filter((actor) => actor.team === 'enemies' && !actor.dead && (actor !== this.boss || this.phase >= 3)).length,
       interaction: this.phase === 3 && this.boss.dead && distanceXZ(this.player.rig.root.position, this.banner.position) < 4.2,
+      ...this.heroHudState(),
       ...this.economyHudState(),
     });
   }
@@ -3203,13 +3432,34 @@ export class SiegeGame {
     };
   }
 
+  private heroHudState(): Pick<HudState,
+    'heroId' | 'heroName' | 'heroIcon' | 'heroAccent' | 'matchLevel' | 'matchXp' | 'matchXpNext'
+    | 'abilityName' | 'abilityIcon' | 'abilityCooldown' | 'ultimateName' | 'ultimateIcon' | 'ultimateCooldown' | 'ultimateUnlocked'> {
+    return {
+      heroId: this.hero.id,
+      heroName: this.hero.name,
+      heroIcon: this.hero.icon,
+      heroAccent: this.hero.accent,
+      matchLevel: this.matchLevel,
+      matchXp: this.matchXp,
+      matchXpNext: matchXpThreshold(this.matchLevel),
+      abilityName: this.hero.ability.name,
+      abilityIcon: this.hero.ability.icon,
+      abilityCooldown: this.heroAbilityCooldown,
+      ultimateName: this.hero.ultimate.name,
+      ultimateIcon: this.hero.ultimate.icon,
+      ultimateCooldown: this.heroUltimateCooldown,
+      ultimateUnlocked: this.matchLevel >= 3,
+    };
+  }
+
   private applyPlayerItemStats(): void {
     const previousMaxHealth = this.player.maxHealth;
     this.playerItemStats = getInventoryStats(this.economy.inventory);
-    this.player.maxHealth = this.level.playerHealth + this.playerItemStats.maxHealth;
+    this.player.maxHealth = this.level.playerHealth + this.hero.stats.maxHealth + this.playerItemStats.maxHealth + (this.matchLevel - 1) * 12;
     this.player.health = Math.min(this.player.maxHealth, this.player.health + Math.max(0, this.player.maxHealth - previousMaxHealth));
-    this.player.damage = this.level.playerDamage + this.playerItemStats.attackDamage;
-    this.player.speed = (this.isCitadelWar ? 5.25 : 4.9) + this.playerItemStats.moveSpeed;
+    this.player.damage = (this.level.playerDamage + this.hero.stats.attackDamage + this.playerItemStats.attackDamage + (this.matchLevel - 1) * 2.2) * (1 + this.heroDamageBuff);
+    this.player.speed = (this.isCitadelWar ? 5.25 : 4.9) + this.hero.stats.moveSpeed + this.playerItemStats.moveSpeed + this.heroSpeedBuff;
   }
 
   private victory(): void {
@@ -3221,7 +3471,7 @@ export class SiegeGame {
     this.joystick.set(0, 0);
     if (document.pointerLockElement) document.exitPointerLock();
     this.audio.victory();
-    this.events.onVictory({ kills: this.kills, duration: this.elapsed, damage: this.damageDone });
+    this.events.onVictory({ kills: this.kills, duration: this.elapsed, damage: this.damageDone, heroId: this.hero.id, matchLevel: this.matchLevel, matchXp: this.matchXp });
   }
 
   private defeat(): void {
@@ -3232,7 +3482,7 @@ export class SiegeGame {
     this.mobileInteract = false;
     this.joystick.set(0, 0);
     if (document.pointerLockElement) document.exitPointerLock();
-    this.events.onDefeat({ kills: this.kills, duration: this.elapsed, damage: this.damageDone });
+    this.events.onDefeat({ kills: this.kills, duration: this.elapsed, damage: this.damageDone, heroId: this.hero.id, matchLevel: this.matchLevel, matchXp: this.matchXp });
   }
 
   private resize(): void {

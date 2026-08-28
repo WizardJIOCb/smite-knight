@@ -78,7 +78,26 @@
             <div><span>02</span><p><b>Проломить ворота</b>Прикрывай таран от стражи и огненных стрел.</p></div>
             <div><span>03</span><p><b>Взять внутренний двор</b>Срази Варгрима и подними наше знамя.</p></div>
           </div>
-          <button id="deploy" class="primary-button"><b>В бой</b><span>Пусть пепел запомнит имя</span></button>
+          <button id="deploy" class="primary-button"><b>Выбрать героя</b><span>Пусть пепел запомнит имя</span></button>
+        </div>
+      </section>
+
+      <section id="hero-select" class="screen" aria-labelledby="hero-select-title">
+        <div class="hero-select-panel">
+          <button id="hero-select-back" class="close-button" aria-label="Вернуться к заданию">×</button>
+          <header class="hero-select-header">
+            <div><div class="eyebrow">ЗАЛ ДЕСЯТИ</div><h2 id="hero-select-title">Выберите героя</h2><p>Четыре героя доступны сразу. Побеждайте, зарабатывайте Короны и открывайте новые классы.</p></div>
+            <div class="crown-wallet"><span>КОРОНЫ РОСТЕРА</span><b><i id="hero-crowns">400</i> 👑</b><small>Отдельная валюта между боями</small></div>
+          </header>
+          <div id="hero-status" class="hero-status" aria-live="polite">Выберите стиль боя, изучите умения и отправляйтесь на фронт.</div>
+          <div class="hero-select-layout">
+            <div id="hero-grid" class="hero-grid"></div>
+            <aside id="hero-detail" class="hero-detail"></aside>
+          </div>
+          <footer class="hero-select-footer">
+            <span>Умение <kbd>Q</kbd> · ультимейт <kbd>R</kbd> открывается на 3 уровне боя</span>
+            <button id="hero-deploy" class="primary-button"><b>В бой</b><span id="hero-deploy-name">Выберите героя</span></button>
+          </footer>
         </div>
       </section>
 
@@ -94,7 +113,15 @@
         </div>
         <div class="bars">
           <img class="crest" src="/favicon.png" alt="" aria-hidden="true" />
-          <div class="bar-stack"><div class="health-bar"><i id="health-fill"></i><span id="health-text">180</span></div><div class="stamina-bar"><i id="stamina-fill"></i></div></div>
+          <div class="bar-stack">
+            <div class="hero-match-row"><span id="combat-hero-icon">🛡️</span><b id="combat-hero-name">Эйрик</b><small>УРОВЕНЬ <strong id="match-level">1</strong></small></div>
+            <div class="hero-xp-bar"><i id="hero-xp-fill"></i><span id="hero-xp-text">0 / 100 XP</span></div>
+            <div class="health-bar"><i id="health-fill"></i><span id="health-text">180</span></div><div class="stamina-bar"><i id="stamina-fill"></i></div>
+          </div>
+        </div>
+        <div id="ability-bar">
+          <button id="ability-toggle" class="ability-button"><kbd>Q</kbd><span id="ability-icon">🛡️</span><b id="ability-name">Удар щита</b><small id="ability-state">ГОТОВО</small><i id="ability-cooldown-fill"></i></button>
+          <button id="ultimate-toggle" class="ability-button ultimate locked"><kbd>R</kbd><span id="ultimate-icon">🏰</span><b id="ultimate-name">Последний бастион</b><small id="ultimate-state">УРОВЕНЬ 3</small><i id="ultimate-cooldown-fill"></i></button>
         </div>
         <div id="weapon-card"><span class="weapon-icon">⚔</span><div><b id="weapon-name">Меч пепла</b><small id="weapon-hint">Удерживайте ЛКМ — серия атак · ПКМ — блок</small></div></div>
         <div id="economy-hud">
@@ -149,8 +176,10 @@
         <div id="mobile-look" aria-label="Область управления камерой"><span>СВАЙП · КАМЕРА</span></div>
         <div id="joystick" aria-label="Джойстик движения"><i></i><span>ДВИЖЕНИЕ</span></div>
         <button id="mobile-sprint" aria-label="Удерживать для бега">БЕГ</button>
-        <button id="mobile-shop">МАГАЗИН</button>
+        <button id="mobile-shop">ЛАВКА</button>
         <button id="mobile-potion">ЗЕЛЬЕ</button>
+        <button id="mobile-ability" aria-label="Использовать умение">Q</button>
+        <button id="mobile-ultimate" aria-label="Использовать ультимейт">R</button>
         <button id="mobile-camera">КАМЕРА</button>
         <button id="mobile-interact" class="hidden">ДЕЙСТВИЕ</button>
         <button id="mobile-block">ЩИТ</button>

@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { clamp, damp } from './math';
+import { meleeAttackProfile } from './combat';
+import { clamp, damp, smoothstep } from './math';
 
 export type RigAction = 'idle' | 'run' | 'jump' | 'attack' | 'block' | 'dead';
 
@@ -331,12 +332,21 @@ export class KnightRig {
     let bodyZ = 0;
 
     if (this.action === 'attack') {
-      const attack = clamp(this.attackClock / 0.58, 0, 1);
-      const windup = Math.sin(attack * Math.PI);
-      rightArmX = -1.85 + attack * 2.45;
-      rightArmZ = -0.8 * windup;
-      bodyZ = 0.28 * windup;
-      bodyX = -0.12 * windup;
+      if (this.role === 'archer') {
+        const draw = Math.sin(clamp(this.attackClock / 0.78, 0, 1) * Math.PI);
+        rightArmX = -1.35 - draw * 0.3;
+        leftArmX = -1.3;
+        bodyX = -0.08 * draw;
+      } else {
+        const profile = meleeAttackProfile(this.role);
+        const windup = smoothstep(0, profile.windupEnd, this.attackClock);
+        const strike = smoothstep(profile.activeStart, profile.activeEnd, this.attackClock);
+        const recovery = smoothstep(profile.activeEnd, profile.duration, this.attackClock);
+        rightArmX = -0.25 - windup * 1.95 + strike * 3 - recovery * 1.02;
+        rightArmZ = -0.88 * windup * (1 - strike);
+        bodyZ = 0.22 * windup * (1 - recovery);
+        bodyX = -0.14 * windup + strike * 0.18 - recovery * 0.04;
+      }
     } else if (this.action === 'block') {
       leftArmX = -1.25;
       leftArmZ = -0.42;
@@ -504,7 +514,8 @@ export class KnightRig {
     next.enabled = true;
     next.clampWhenFinished = !loop;
     next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Number.POSITIVE_INFINITY : 1);
-    next.setEffectiveTimeScale(1);
+    const attackDuration = this.role === 'archer' ? 0.78 : meleeAttackProfile(this.role).duration;
+    next.setEffectiveTimeScale(action === 'attack' ? clip.duration / attackDuration : 1);
     next.setEffectiveWeight(1);
     next.play();
     if (this.activeAnimation && !immediate) this.activeAnimation.crossFadeTo(next, action === 'dead' ? 0.08 : 0.14, false);

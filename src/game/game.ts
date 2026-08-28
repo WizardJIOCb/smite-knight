@@ -5,6 +5,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import type { NetworkPlayer } from '../../shared/protocol';
 import { BattleAudio } from './audio';
+import { attackPhaseAt, bladeSweepAngle, meleeAttackProfile, sweptBladeContact, type MeleeAttackProfile } from './combat';
 import { applyDestructibleDamage, pointHitsObstacle, radialDestructibleDamage, segmentHitsObstacle } from './destruction';
 import { KnightRig, createRemoteKnight, type RigAction } from './models';
 import {
@@ -16,7 +17,6 @@ import {
   formationFollowVelocity,
   formationShouldMove,
   movementDirection,
-  pointInAttackArc,
   ramEscortGateShift,
   ramEscortOffset,
   seededRandom,
@@ -70,6 +70,8 @@ interface Actor {
   action: RigAction;
   actionTime: number;
   hitDone: boolean;
+  swingStarted: boolean;
+  attackTrailTimer: number;
   dead: boolean;
   target?: Actor;
   decisionTimer: number;
@@ -99,6 +101,7 @@ interface Particle {
 }
 
 type ImpactSurface = 'earth' | 'stone' | 'wood' | 'armor';
+type DamageKind = 'melee' | 'projectile' | 'explosion';
 
 interface ExplosiveProp {
   group: THREE.Group;
@@ -1011,6 +1014,8 @@ export class SiegeGame {
       action: 'idle',
       actionTime: 0,
       hitDone: false,
+      swingStarted: false,
+      attackTrailTimer: 0,
       dead: false,
       decisionTimer: 0,
       strafe: this.random() > 0.5 ? 1 : -1,
@@ -1110,7 +1115,11 @@ export class SiegeGame {
     if (this.player.dead) return;
     this.player.cooldown = Math.max(0, this.player.cooldown - delta);
     this.player.actionTime += delta;
-    if (this.player.action === 'attack' && this.player.actionTime > 0.58) this.player.action = 'idle';
+    if (this.player.action === 'attack') {
+      const profile = meleeAttackProfile('soldier');
+      this.updateMeleeAttack(this.player, profile, delta);
+      if (this.player.actionTime >= profile.duration) this.player.action = 'idle';
+    }
     if (this.player.action === 'block') this.player.stamina = Math.max(0, this.player.stamina - delta * 8);
     else this.player.stamina = Math.min(100, this.player.stamina + delta * 17);
 
@@ -1150,13 +1159,13 @@ export class SiegeGame {
     this.player.rig.setVerticalOffset(0);
     const sprint = this.keys.has('ShiftLeft') && this.player.stamina > 8 ? 1.38 : 1;
     if (sprint > 1 && inputStrength > 0.01) this.player.stamina = Math.max(0, this.player.stamina - delta * 12);
-    const moveSpeed = this.player.speed * sprint * (this.player.action === 'block' ? 0.38 : 1);
+    const moveSpeed = this.player.speed * sprint * (this.player.action === 'block' ? 0.38 : this.player.action === 'attack' ? 0.32 : 1);
     const direction = movementDirection(inputX, inputZ, this.yaw);
     if (direction) {
       this.temp.set(direction.x, 0, direction.z);
       this.player.rig.root.position.addScaledVector(this.temp, moveSpeed * delta);
       if (this.player.action !== 'attack' && this.player.action !== 'block') this.player.action = 'run';
-      this.player.rig.root.rotation.y = dampAngle(this.player.rig.root.rotation.y, Math.atan2(direction.x, direction.z), 12, delta);
+      if (this.player.action !== 'attack') this.player.rig.root.rotation.y = dampAngle(this.player.rig.root.rotation.y, Math.atan2(direction.x, direction.z), 12, delta);
     } else if (this.player.action === 'run') this.player.action = 'idle';
     this.resolveWorldCollision(this.player.rig.root.position);
     this.resolveRamCollision(this.player.rig.root.position);
@@ -1253,6 +1262,8 @@ export class SiegeGame {
           actor.action = 'attack';
           actor.actionTime = 0;
           actor.hitDone = false;
+          actor.swingStarted = false;
+          actor.attackTrailTimer = 0;
           actor.cooldown = actor.role === 'boss' ? 0.86 : actor.role === 'brute' ? 1.35 : actor.role === 'archer' ? 1.9 + this.random() : 1.1 + this.random() * 0.45;
           if (actor.role === 'archer') this.audio.bow();
         }
@@ -1280,14 +1291,17 @@ export class SiegeGame {
       }
 
       if (actor.action === 'attack') {
-        const impactMoment = actor.role === 'archer' ? 0.52 : actor.role === 'brute' || actor.role === 'boss' ? 0.39 : 0.31;
-        if (!actor.hitDone && actor.actionTime >= impactMoment) {
-          actor.hitDone = true;
-          if (actor.role === 'archer') this.fireArrow(actor);
-          else this.actorMeleeHit(actor);
+        if (actor.role === 'archer') {
+          if (!actor.hitDone && actor.actionTime >= 0.52) {
+            actor.hitDone = true;
+            this.fireArrow(actor);
+          }
+          if (actor.actionTime >= 0.78) actor.action = 'idle';
+        } else {
+          const profile = meleeAttackProfile(actor.role === 'player' ? 'soldier' : actor.role);
+          this.updateMeleeAttack(actor, profile, delta);
+          if (actor.actionTime >= profile.duration) actor.action = 'idle';
         }
-        const duration = actor.role === 'archer' ? 0.78 : actor.role === 'brute' || actor.role === 'boss' ? 0.76 : 0.62;
-        if (actor.actionTime >= duration) actor.action = 'idle';
       } else if (!moving && this.random() < delta * 0.08 && actor.role !== 'boss') {
         actor.action = 'block';
       } else if (actor.action === 'block' && actor.actionTime > 0.7) actor.action = 'idle';
@@ -1358,46 +1372,94 @@ export class SiegeGame {
     return force;
   }
 
-  private actorMeleeHit(actor: Actor): void {
-    const target = actor.target;
-    const attacker = { x: actor.rig.root.position.x, z: actor.rig.root.position.z, rotation: actor.rig.root.rotation.y };
-    if (target && !target.dead && pointInAttackArc(attacker, target.rig.root.position, actor.attackRange + 0.45)) {
-      this.damageActor(target, actor.damage * (0.82 + this.random() * 0.34), actor);
+  private updateMeleeAttack(actor: Actor, profile: MeleeAttackProfile, delta: number): void {
+    const phase = attackPhaseAt(actor.actionTime, profile);
+    if (phase === 'active') {
+      if (!actor.swingStarted) {
+        actor.swingStarted = true;
+        if (actor === this.player || distanceXZ(actor.rig.root.position, this.player.rig.root.position) < 16) this.audio.sword();
+      }
+      actor.attackTrailTimer -= delta;
+      if (actor.attackTrailTimer <= 0) {
+        actor.attackTrailTimer = 0.035;
+        this.spawnBladeTrail(actor, profile);
+      }
+      if (!actor.hitDone && this.applyMeleeContact(actor, profile, delta)) actor.hitDone = true;
+    } else if ((phase === 'recovery' || phase === 'finished') && !actor.hitDone) {
+      actor.hitDone = true;
     }
-    this.damageDestructiblesInArc(attacker, actor.rig.root.position.y, actor.attackRange + 0.65, Math.PI * 0.46, actor.damage * 0.9);
+  }
+
+  private applyMeleeContact(actor: Actor, profile: MeleeAttackProfile, delta: number): boolean {
+    const position = actor.rig.root.position;
+    const attacker = { x: position.x, z: position.z, rotation: actor.rig.root.rotation.y };
+    const range = actor.attackRange + 0.42;
+    let target: Actor | undefined;
+    let targetDistance = Number.POSITIVE_INFINITY;
+    const candidates = actor === this.player ? this.actors : actor.target ? [actor.target] : [];
+    for (const candidate of candidates) {
+      if (candidate === actor || candidate.dead || candidate.team === actor.team || candidate === this.boss && this.phase < 3) continue;
+      if (Math.abs(candidate.rig.root.position.y - position.y) > 3.2) continue;
+      const radius = candidate.role === 'boss' ? 1.05 : candidate.role === 'brute' ? 0.78 : 0.6;
+      if (!sweptBladeContact(attacker, candidate.rig.root.position, actor.actionTime, profile, range, radius, actor.actionTime - delta)) continue;
+      const distance = distanceXZ(position, candidate.rig.root.position);
+      if (distance < targetDistance) {
+        target = candidate;
+        targetDistance = distance;
+      }
+    }
+    if (target) {
+      this.damageActor(target, actor.damage * (0.88 + this.random() * 0.28), actor, 'melee');
+      return true;
+    }
+
+    if (actor === this.player && this.phase === 1 && sweptBladeContact(attacker, this.gateGroup.position, actor.actionTime, profile, range, 2.35, actor.actionTime - delta)) {
+      this.damageGate(3.5);
+      this.spawnArmorHitEffect(new THREE.Vector3(attacker.x, position.y + 1.15, attacker.z).add(new THREE.Vector3(Math.sin(attacker.rotation), 0, Math.cos(attacker.rotation)).multiplyScalar(2.6)), true);
+      this.audio.hit(false);
+      return true;
+    }
+
+    for (const explosive of this.explosives) {
+      if (!explosive.armed || !sweptBladeContact(attacker, explosive.group.position, actor.actionTime, profile, range, explosive.triggerRadius, actor.actionTime - delta)) continue;
+      this.detonateExplosive(explosive, actor.team);
+      return true;
+    }
+
+    let closestProp: DestructibleProp | undefined;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    for (const prop of this.destructibles) {
+      if (prop.destroyed || Math.abs(prop.root.position.y - position.y) > 3.4) continue;
+      if (!sweptBladeContact(attacker, prop.root.position, actor.actionTime, profile, range, prop.radius * 0.72, actor.actionTime - delta)) continue;
+      const distance = distanceXZ(position, prop.root.position);
+      if (distance < closestDistance) {
+        closestProp = prop;
+        closestDistance = distance;
+      }
+    }
+    if (!closestProp) return false;
+    const force = new THREE.Vector3(Math.sin(attacker.rotation), 0.22, Math.cos(attacker.rotation)).normalize();
+    const impact = new THREE.Vector3(
+      closestProp.root.position.x,
+      closestProp.root.position.y + Math.min(closestProp.centerOffsetY, 1.25),
+      closestProp.root.position.z,
+    );
+    this.damageDestructible(closestProp, actor.damage * (actor === this.player ? 1.18 : 0.9), impact, force);
+    this.audio.hit(false);
+    return true;
   }
 
   private playerAttack(): void {
-    if (this.mode !== 'running' || this.player.dead || this.jumpTimer > 0 || this.player.cooldown > 0 || this.player.stamina < 12) return;
+    if (this.mode !== 'running' || this.player.dead || this.jumpTimer > 0 || this.player.action === 'attack' || this.player.cooldown > 0 || this.player.stamina < 12) return;
+    const profile = meleeAttackProfile('soldier');
     this.player.action = 'attack';
     this.player.actionTime = 0;
-    this.player.hitDone = true;
-    this.player.cooldown = 0.47;
+    this.player.hitDone = false;
+    this.player.swingStarted = false;
+    this.player.attackTrailTimer = 0;
+    this.player.cooldown = profile.duration + 0.06;
     this.player.stamina -= 12;
-    this.audio.sword();
-    window.setTimeout(() => {
-      if (this.mode !== 'running' || this.player.dead) return;
-      const attacker = { x: this.player.rig.root.position.x, z: this.player.rig.root.position.z, rotation: this.yaw };
-      let hit = false;
-      for (const actor of this.actors) {
-        if (actor.team !== 'enemies' || actor.dead || actor === this.boss && this.phase < 3) continue;
-        if (pointInAttackArc(attacker, actor.rig.root.position, 3.25, Math.PI * 0.46)) {
-          this.damageActor(actor, this.player.damage * (0.88 + this.random() * 0.32), this.player);
-          hit = true;
-        }
-      }
-      if (this.phase === 1 && distanceXZ(this.player.rig.root.position, this.gateGroup.position) < 5.2) {
-        this.damageGate(3.5);
-        hit = true;
-      }
-      for (const explosive of this.explosives) {
-        if (!explosive.armed || !pointInAttackArc(attacker, explosive.group.position, 3.4, Math.PI * 0.52)) continue;
-        this.detonateExplosive(explosive, 'allies');
-        hit = true;
-      }
-      if (this.damageDestructiblesInArc(attacker, this.player.rig.root.position.y, 3.55, Math.PI * 0.52, this.player.damage * 1.18)) hit = true;
-      if (hit) this.audio.hit(false);
-    }, 180);
+    this.player.rig.root.rotation.y = this.yaw;
   }
 
   private playerDodge(): void {
@@ -1442,29 +1504,6 @@ export class SiegeGame {
     }
   }
 
-  private damageDestructiblesInArc(
-    attacker: { x: number; z: number; rotation: number },
-    attackerHeight: number,
-    range: number,
-    halfArc: number,
-    damage: number,
-  ): boolean {
-    const force = new THREE.Vector3(Math.sin(attacker.rotation), 0.22, Math.cos(attacker.rotation)).normalize();
-    let hits = 0;
-    for (const prop of this.destructibles) {
-      if (prop.destroyed || Math.abs(prop.root.position.y - attackerHeight) > 3.4) continue;
-      if (!pointInAttackArc(attacker, prop.root.position, range + prop.radius * 0.45, halfArc)) continue;
-      const impact = new THREE.Vector3(
-        prop.root.position.x,
-        prop.root.position.y + Math.min(prop.centerOffsetY, 1.25),
-        prop.root.position.z,
-      );
-      if (this.damageDestructible(prop, damage, impact, force)) hits += 1;
-      if (hits >= 5) break;
-    }
-    return hits > 0;
-  }
-
   private damageDestructible(prop: DestructibleProp, damage: number, impact: THREE.Vector3, force: THREE.Vector3): boolean {
     const next = applyDestructibleDamage(prop, damage);
     if (next === prop || next.health === prop.health && next.destroyed === prop.destroyed) return false;
@@ -1505,12 +1544,14 @@ export class SiegeGame {
     }
   }
 
-  private damageActor(target: Actor, rawDamage: number, attacker: Actor): void {
+  private damageActor(target: Actor, rawDamage: number, attacker: Actor, kind: DamageKind = 'melee'): void {
     if (target.dead) return;
     let damage = rawDamage;
+    let blocked = false;
     if (target === this.player && target.action === 'block' && target.stamina > 0) {
       const facing = Math.abs(angleDelta(target.rig.root.rotation.y, Math.atan2(attacker.rig.root.position.x - target.rig.root.position.x, attacker.rig.root.position.z - target.rig.root.position.z)));
       if (facing < Math.PI * 0.68) {
+        blocked = true;
         damage *= 0.22;
         target.stamina = Math.max(0, target.stamina - rawDamage * 0.8);
         this.audio.block();
@@ -1520,8 +1561,18 @@ export class SiegeGame {
     target.lastAttacker = attacker;
     target.rig.flashDamage();
     const hitPosition = target.rig.root.position.clone().add(new THREE.Vector3(0, 1.2, 0));
-    this.spawnImpact(hitPosition, target.team === 'enemies' ? 0xc34025 : 0x4a8792, 6);
-    if (attacker === this.player) this.damageDone += damage;
+    const hitDirection = target.rig.root.position.clone().sub(attacker.rig.root.position).setY(0.18);
+    if (hitDirection.lengthSq() < 0.01) hitDirection.set(0, 0.18, 1);
+    else hitDirection.normalize();
+    if (kind !== 'explosion') {
+      this.spawnArmorHitEffect(hitPosition, blocked, hitDirection);
+      if (!blocked) this.spawnBloodEffect(hitPosition, hitDirection, damage);
+    }
+    if (!blocked && kind !== 'explosion') this.audio.hit(target.role === 'boss' || target.role === 'brute');
+    if (attacker === this.player) {
+      this.damageDone += damage;
+      if (kind === 'melee') this.cameraShake = Math.max(this.cameraShake, blocked ? 0.1 : 0.16);
+    }
     if (target === this.player) {
       this.events.onDamage(clamp(damage / 45, 0.2, 1));
       this.cameraShake = Math.max(this.cameraShake, damage / 80);
@@ -1534,7 +1585,6 @@ export class SiegeGame {
     target.action = 'dead';
     target.actionTime = 0;
     target.rig.setState('dead', 0, 0.016);
-    this.audio.hit(target.role === 'boss');
     if (attacker === this.player) {
       this.kills += 1;
       this.events.onFeed(`<b>${target.role === 'boss' ? 'Лорд Варгрим повержен' : 'Страж повержен'}</b> · ${Math.round(attacker.damage)} урона`);
@@ -1647,7 +1697,7 @@ export class SiegeGame {
         if (remove || actor.dead || actor.team === projectile.team) continue;
         if (projectile.mesh.position.distanceTo(actor.rig.root.position.clone().add(new THREE.Vector3(0, 1, 0))) < (projectile.fire ? 1.25 : 0.65)) {
           if (projectile.fire) this.explode(projectile.mesh.position, projectile.team, 5, 46, 'armor');
-          else this.damageActor(actor, projectile.damage, this.findProjectileOwner(projectile.team));
+          else this.damageActor(actor, projectile.damage, this.findProjectileOwner(projectile.team), 'projectile');
           remove = true;
         }
       }
@@ -1689,7 +1739,7 @@ export class SiegeGame {
       const distance = actor.rig.root.position.distanceTo(position);
       if (distance < radius) {
         const attacker = sourceTeam === 'allies' ? this.player : this.findProjectileOwner('enemies');
-        this.damageActor(actor, (1 - distance / radius) * damage, attacker);
+        this.damageActor(actor, (1 - distance / radius) * damage, attacker, 'explosion');
       }
     }
     for (const prop of this.destructibles) {
@@ -1893,6 +1943,103 @@ export class SiegeGame {
         gravity: 0,
         drag: 2.8,
         growth: 0.45,
+      });
+    }
+  }
+
+  private spawnBladeTrail(actor: Actor, profile: MeleeAttackProfile): void {
+    const sweep = bladeSweepAngle(actor.actionTime, profile);
+    if (sweep === undefined) return;
+    const facing = actor.rig.root.rotation.y;
+    const forward = new THREE.Vector3(Math.sin(facing), 0, Math.cos(facing));
+    const scale = actor.role === 'boss' ? 1.42 : actor.role === 'brute' ? 1.2 : 1;
+    const trail = new THREE.Mesh(
+      new THREE.RingGeometry(0.58 * scale, 1.5 * scale, 14, 1, -0.52, 0.86),
+      new THREE.MeshBasicMaterial({
+        color: actor.team === 'allies' ? 0xd7f6ff : 0xff7540,
+        transparent: true,
+        opacity: actor === this.player ? 0.56 : 0.38,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    trail.position.copy(actor.rig.root.position).add(new THREE.Vector3(0, 1.18 * scale, 0)).addScaledVector(forward, 1.05 * scale);
+    trail.quaternion.setFromUnitVectors(FORWARD, forward);
+    trail.rotateZ(-0.72 + sweep * 0.2);
+    this.scene.add(trail);
+    this.particles.push({
+      mesh: trail,
+      velocity: forward.clone().multiplyScalar(0.35),
+      life: 0.14,
+      maxLife: 0.14,
+      gravity: 0,
+      drag: 4,
+      growth: 0.7,
+    });
+  }
+
+  private spawnArmorHitEffect(position: THREE.Vector3, blocked: boolean, direction: THREE.Vector3 = FORWARD): void {
+    const sparkColor = blocked ? 0xfff1b0 : 0xffb24e;
+    const flash = new THREE.Mesh(
+      new THREE.SphereGeometry(blocked ? 0.19 : 0.13, 8, 5),
+      new THREE.MeshBasicMaterial({ color: sparkColor, transparent: true, opacity: 0.95, depthWrite: false, blending: THREE.AdditiveBlending }),
+    );
+    flash.position.copy(position);
+    this.scene.add(flash);
+    this.particles.push({ mesh: flash, velocity: direction.clone().multiplyScalar(0.35), life: 0.14, maxLife: 0.14, gravity: 0, growth: blocked ? 6 : 4 });
+
+    const sparkCount = blocked ? 17 : 10;
+    for (let index = 0; index < sparkCount; index += 1) {
+      const spark = new THREE.Mesh(
+        new THREE.BoxGeometry(0.026, 0.026, 0.18 + this.random() * 0.3),
+        new THREE.MeshBasicMaterial({ color: index % 3 === 0 ? 0xffffff : sparkColor, transparent: true, opacity: 0.95, depthWrite: false, blending: THREE.AdditiveBlending }),
+      );
+      spark.position.copy(position);
+      const velocity = direction.clone().multiplyScalar(1.5 + this.random() * 3.8).add(new THREE.Vector3((this.random() - 0.5) * 5.5, (this.random() - 0.15) * 5.2, (this.random() - 0.5) * 5.5));
+      spark.quaternion.setFromUnitVectors(FORWARD, velocity.clone().normalize());
+      this.scene.add(spark);
+      const life = 0.25 + this.random() * 0.3;
+      this.particles.push({ mesh: spark, velocity, life, maxLife: life, gravity: 5.4, drag: 0.55 });
+    }
+
+    if (blocked) {
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.18, 0.28, 16),
+        new THREE.MeshBasicMaterial({ color: 0xffe7a0, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }),
+      );
+      ring.position.copy(position);
+      ring.quaternion.setFromUnitVectors(FORWARD, direction.clone().normalize());
+      this.scene.add(ring);
+      this.particles.push({ mesh: ring, velocity: direction.clone().multiplyScalar(0.5), life: 0.2, maxLife: 0.2, gravity: 0, growth: 5.5 });
+    }
+  }
+
+  private spawnBloodEffect(position: THREE.Vector3, direction: THREE.Vector3, damage: number): void {
+    const mist = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.12, 1),
+      new THREE.MeshBasicMaterial({ color: 0x9f111c, transparent: true, opacity: 0.62, depthWrite: false }),
+    );
+    mist.position.copy(position).addScaledVector(direction, 0.12);
+    this.scene.add(mist);
+    this.particles.push({ mesh: mist, velocity: direction.clone().multiplyScalar(1.2), life: 0.2, maxLife: 0.2, gravity: 0.8, drag: 2.8, growth: 3.8 });
+
+    const count = Math.round(clamp(5 + damage * 0.14, 7, 13));
+    for (let index = 0; index < count; index += 1) {
+      const droplet = new THREE.Mesh(
+        new THREE.SphereGeometry(0.025 + this.random() * 0.035, 5, 4),
+        new THREE.MeshBasicMaterial({ color: index % 3 === 0 ? 0x4e050a : 0xa70d17, transparent: true, opacity: 0.9, depthWrite: false }),
+      );
+      droplet.position.copy(position).add(new THREE.Vector3((this.random() - 0.5) * 0.16, (this.random() - 0.5) * 0.2, (this.random() - 0.5) * 0.16));
+      this.scene.add(droplet);
+      const life = 0.48 + this.random() * 0.42;
+      this.particles.push({
+        mesh: droplet,
+        velocity: direction.clone().multiplyScalar(1.2 + this.random() * 2.7).add(new THREE.Vector3((this.random() - 0.5) * 2.8, 0.8 + this.random() * 2.8, (this.random() - 0.5) * 2.8)),
+        life,
+        maxLife: life,
+        gravity: 7.2,
+        drag: 0.35,
       });
     }
   }

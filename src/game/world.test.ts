@@ -3,6 +3,8 @@ import {
   battlefieldSurfaceAt,
   CASTLE_LIMITS,
   castleGroundHeight,
+  ramAdvanceMultiplier,
+  ramEscortRequirement,
   summitAllyRequirement,
   summitAssaultReady,
 } from './world';
@@ -48,5 +50,22 @@ describe('summit assault objective', () => {
 
   it('still requires the player to reach the summit', () => {
     expect(summitAssaultReady(false, 3, 3)).toBe(false);
+  });
+});
+
+describe('battering ram escort objective', () => {
+  it('normally requires two living allies beside the ram', () => {
+    expect(ramEscortRequirement(24)).toBe(2);
+    expect(ramAdvanceMultiplier(true, 1, 24)).toBe(0);
+    expect(ramAdvanceMultiplier(true, 2, 24)).toBe(1);
+  });
+
+  it('lets the last surviving player move the ram at a reduced pace', () => {
+    expect(ramEscortRequirement(1)).toBe(1);
+    expect(ramAdvanceMultiplier(true, 1, 1)).toBe(0.7);
+  });
+
+  it('never moves the ram while the player is away', () => {
+    expect(ramAdvanceMultiplier(false, 2, 2)).toBe(0);
   });
 });

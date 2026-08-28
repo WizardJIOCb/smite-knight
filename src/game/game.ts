@@ -5,8 +5,17 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import type { NetworkPlayer } from '../../shared/protocol';
 import { BattleAudio } from './audio';
-import { attackPhaseAt, bladeSweepAngle, meleeAttackProfile, sweptBladeContact, type MeleeAttackProfile } from './combat';
+import {
+  attackPhaseAt,
+  bladeSweepAngle,
+  heldAttackShouldStart,
+  meleeAttackProfile,
+  PLAYER_ATTACK_STAMINA,
+  sweptBladeContact,
+  type MeleeAttackProfile,
+} from './combat';
 import { applyDestructibleDamage, pointHitsObstacle, radialDestructibleDamage, segmentHitsObstacle } from './destruction';
+import { mountGeneratedLevelProps } from './generatedProps';
 import { LEVELS, type LevelDefinition } from './levels';
 import { KnightRig, createRemoteKnight, type RigAction } from './models';
 import {
@@ -27,6 +36,7 @@ import {
   battlefieldSurfaceAt,
   CASTLE_LIMITS,
   castleGroundHeight,
+  ramAdvanceMultiplier,
   summitAllyRequirement,
   summitAssaultReady,
 } from './world';
@@ -212,6 +222,7 @@ export class SiegeGame {
   private respawnTimer = 0;
   private lastHud = 0;
   private lastPointerLock = false;
+  private primaryAttackHeld = false;
   private isMobile = matchMedia('(pointer: coarse)').matches;
   private joystick = new THREE.Vector2();
   private quality: 'high' | 'medium' | 'low' = 'high';
@@ -245,6 +256,7 @@ export class SiegeGame {
     this.mode = 'running';
     this.elapsed = 0;
     this.lastPointerLock = false;
+    this.primaryAttackHeld = false;
     this.audio.horn();
     if (!this.isMobile) this.lockPointer();
     this.emitHud(true);
@@ -252,12 +264,14 @@ export class SiegeGame {
 
   pause(): void {
     if (this.mode !== 'running') return;
+    this.primaryAttackHeld = false;
     this.mode = 'paused';
     if (document.pointerLockElement) document.exitPointerLock();
   }
 
   resume(): void {
     if (this.mode !== 'paused') return;
+    this.primaryAttackHeld = false;
     this.mode = 'running';
     if (!this.isMobile) this.lockPointer();
   }
@@ -396,6 +410,7 @@ export class SiegeGame {
     this.buildCastle();
     this.buildBattlefield();
     this.buildLevelEnvironment();
+    mountGeneratedLevelProps(this.scene, this.level.environment, castleGroundHeight);
     this.buildSkyline();
     this.camera.position.set(19, 10, 46);
     this.camera.lookAt(0, 5, -24);
@@ -1289,7 +1304,11 @@ export class SiegeGame {
       this.keys.add(event.code);
     });
     window.addEventListener('keyup', (event) => this.keys.delete(event.code));
-    window.addEventListener('blur', () => this.keys.clear());
+    window.addEventListener('blur', () => {
+      this.keys.clear();
+      this.primaryAttackHeld = false;
+      this.setBlock(false);
+    });
     document.addEventListener('mousemove', (event) => {
       if (this.mode !== 'running' || document.pointerLockElement !== this.canvas) return;
       this.yaw -= event.movementX * 0.0022;
@@ -1301,15 +1320,22 @@ export class SiegeGame {
         this.lockPointer();
         return;
       }
-      if (event.button === 0) this.playerAttack();
+      if (event.button === 0) {
+        this.primaryAttackHeld = true;
+        this.playerAttack();
+      }
       if (event.button === 2) this.setBlock(true);
     });
-    window.addEventListener('mouseup', (event) => { if (event.button === 2) this.setBlock(false); });
+    window.addEventListener('mouseup', (event) => {
+      if (event.button === 0) this.primaryAttackHeld = false;
+      if (event.button === 2) this.setBlock(false);
+    });
     this.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
     document.addEventListener('pointerlockchange', () => {
       const locked = document.pointerLockElement === this.canvas;
       if (locked) this.lastPointerLock = true;
       if (!locked && this.lastPointerLock && this.mode === 'running') {
+        this.primaryAttackHeld = false;
         this.mode = 'paused';
         this.events.onPause();
       }
@@ -1374,6 +1400,9 @@ export class SiegeGame {
       this.updateMeleeAttack(this.player, profile, delta);
       if (this.player.actionTime >= profile.duration) this.player.action = 'idle';
     }
+    if (heldAttackShouldStart(this.primaryAttackHeld, this.player.action === 'attack', this.player.cooldown, this.player.stamina)) {
+      this.playerAttack();
+    }
     if (this.player.action === 'block') this.player.stamina = Math.max(0, this.player.stamina - delta * 8);
     else this.player.stamina = Math.min(100, this.player.stamina + delta * 17);
 
@@ -1432,10 +1461,12 @@ export class SiegeGame {
     this.ramVelocityZ = 0;
     if (this.phase === 0) {
       const playerNear = distanceXZ(this.player.rig.root.position, this.ram.position) < 16;
+      const livingAllies = this.actors.filter((actor) => !actor.dead && actor.team === 'allies').length;
       const nearbyAllies = this.actors.filter((actor) => !actor.dead && actor.team === 'allies' && distanceXZ(actor.rig.root.position, this.ram.position) < 8).length;
-      if (playerNear && nearbyAllies >= 2) {
+      const advanceMultiplier = ramAdvanceMultiplier(playerNear, nearbyAllies, livingAllies);
+      if (advanceMultiplier > 0) {
         const previousZ = this.ram.position.z;
-        this.ram.position.z = Math.max(-21.9, previousZ - delta * 1.25);
+        this.ram.position.z = Math.max(-21.9, previousZ - delta * 1.25 * advanceMultiplier);
         if (delta > 0) this.ramVelocityZ = (this.ram.position.z - previousZ) / delta;
       }
       if (this.ram.position.z <= -21.85) {
@@ -1792,7 +1823,7 @@ export class SiegeGame {
   }
 
   private playerAttack(): void {
-    if (this.mode !== 'running' || this.player.dead || this.jumpTimer > 0 || this.player.action === 'attack' || this.player.cooldown > 0 || this.player.stamina < 12) return;
+    if (this.mode !== 'running' || this.player.dead || this.jumpTimer > 0 || this.player.action === 'attack' || this.player.cooldown > 0 || this.player.stamina < PLAYER_ATTACK_STAMINA) return;
     const profile = meleeAttackProfile('soldier');
     this.player.action = 'attack';
     this.player.actionTime = 0;
@@ -1801,7 +1832,7 @@ export class SiegeGame {
     this.player.attackTrailTimer = 0;
     this.player.trailSweepAngle = undefined;
     this.player.cooldown = profile.duration + 0.06;
-    this.player.stamina -= 12;
+    this.player.stamina -= PLAYER_ATTACK_STAMINA;
     this.player.rig.root.rotation.y = this.yaw;
   }
 
@@ -2621,6 +2652,8 @@ export class SiegeGame {
     this.lastHud = this.elapsed;
     let objective = `Проведите таран · ${this.level.title}`;
     let progress = clamp((15 - this.ram.position.z) / 36.9 * 100, 0, 100);
+    const livingAllies = this.actors.filter((actor) => actor.team === 'allies' && !actor.dead).length;
+    if (this.phase === 0 && livingAllies === 1) objective = `Последний рыцарь: доведите таран до ворот · ${this.level.title}`;
     if (this.phase === 1) {
       objective = 'Защитите таран и сокрушите ворота';
       progress = 100 - this.gateHealth;
@@ -2641,7 +2674,7 @@ export class SiegeGame {
       phase: this.phase,
       objective,
       progress,
-      allies: this.actors.filter((actor) => actor.team === 'allies' && !actor.dead).length,
+      allies: livingAllies,
       enemies: this.actors.filter((actor) => actor.team === 'enemies' && !actor.dead && (actor !== this.boss || this.phase >= 3)).length,
       interaction: this.phase === 3 && this.boss.dead && distanceXZ(this.player.rig.root.position, this.banner.position) < 4.2,
     });

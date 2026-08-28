@@ -20,6 +20,15 @@ export function summitAssaultReady(playerAtSummit: boolean, summitAllies: number
   return playerAtSummit && summitAllies >= summitAllyRequirement(livingAllies);
 }
 
+export function ramEscortRequirement(livingAllies: number): number {
+  return Math.max(1, Math.min(2, Math.floor(livingAllies)));
+}
+
+export function ramAdvanceMultiplier(playerNear: boolean, nearbyAllies: number, livingAllies: number): number {
+  if (!playerNear || nearbyAllies < ramEscortRequirement(livingAllies)) return 0;
+  return livingAllies <= 1 ? 0.7 : 1;
+}
+
 export function castleGroundHeight(x: number, z: number): number {
   if (Math.abs(x) > 17 || z > CASTLE_LIMITS.firstStairStartZ || z < CASTLE_LIMITS.backWallZ) return 0;
   if (z >= CASTLE_LIMITS.firstStairEndZ) {

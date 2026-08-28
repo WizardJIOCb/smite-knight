@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attackPhaseAt, bladeSweepAngle, meleeAttackProfile, sweptBladeContact } from './combat';
+import { attackPhaseAt, bladeSweepAngle, heldAttackShouldStart, meleeAttackProfile, sweptBladeContact } from './combat';
 
 describe('melee attack contact window', () => {
   const profile = meleeAttackProfile('soldier');
@@ -31,5 +31,18 @@ describe('melee attack contact window', () => {
     const middle = (profile.activeStart + profile.activeEnd) * 0.5;
     expect(sweptBladeContact(attacker, { x: 0, z: 4.2 }, middle, profile, 3)).toBe(false);
     expect(sweptBladeContact(attacker, { x: 0, z: -2 }, middle, profile, 3)).toBe(false);
+  });
+});
+
+describe('held melee attack', () => {
+  it('starts the next strike once the current attack and cooldown finish', () => {
+    expect(heldAttackShouldStart(true, false, 0, 12)).toBe(true);
+    expect(heldAttackShouldStart(true, true, 0, 100)).toBe(false);
+    expect(heldAttackShouldStart(true, false, 0.05, 100)).toBe(false);
+  });
+
+  it('stops on release and waits for enough stamina', () => {
+    expect(heldAttackShouldStart(false, false, 0, 100)).toBe(false);
+    expect(heldAttackShouldStart(true, false, 0, 11.99)).toBe(false);
   });
 });

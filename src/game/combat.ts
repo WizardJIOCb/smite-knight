@@ -2,6 +2,7 @@ import { angleDelta, clamp, smoothstep } from './math';
 
 export type MeleeRole = 'soldier' | 'brute' | 'boss';
 export type AttackPhase = 'windup' | 'active' | 'recovery' | 'finished';
+export const PLAYER_ATTACK_STAMINA = 12;
 
 export interface MeleeAttackProfile {
   windupEnd: number;
@@ -21,6 +22,10 @@ const attackProfiles: Record<MeleeRole, MeleeAttackProfile> = {
 
 export function meleeAttackProfile(role: MeleeRole): MeleeAttackProfile {
   return attackProfiles[role];
+}
+
+export function heldAttackShouldStart(held: boolean, attackActive: boolean, cooldown: number, stamina: number): boolean {
+  return held && !attackActive && cooldown <= 0 && stamina >= PLAYER_ATTACK_STAMINA;
 }
 
 export function attackPhaseAt(time: number, profile: MeleeAttackProfile): AttackPhase {

@@ -38,9 +38,9 @@
             <button id="open-maps" class="secondary-button"><b>Выбор карты</b><span>Любая операция отдельно</span></button>
             <button id="open-multiplayer" class="secondary-button"><b>Сетевая битва</b><span>Комнаты до 8 рыцарей</span></button>
           </div>
-          <div class="landing-note"><kbd>WASD</kbd> движение <i></i><kbd>ЛКМ</kbd> удар / удерживать <i></i><kbd>ПКМ</kbd> блок <i></i><kbd>SPACE</kbd> прыжок-таран</div>
+          <div class="landing-note"><kbd>WASD</kbd> движение <i></i><kbd>ЛКМ</kbd> удар / удерживать <i></i><kbd>B</kbd> магазин <i></i><kbd>H</kbd> зелье <i></i><kbd>SPACE</kbd> прыжок-таран</div>
         </div>
-        <div class="build-mark">WEBGL SIEGE · KAYKIT CC0 · v1.1</div>
+        <div class="build-mark">WEBGL SIEGE · KAYKIT CC0 · v1.2</div>
       </section>
 
       <section id="map-select" class="screen" aria-labelledby="map-select-title">
@@ -97,6 +97,13 @@
           <div class="bar-stack"><div class="health-bar"><i id="health-fill"></i><span id="health-text">180</span></div><div class="stamina-bar"><i id="stamina-fill"></i></div></div>
         </div>
         <div id="weapon-card"><span class="weapon-icon">⚔</span><div><b id="weapon-name">Меч пепла</b><small id="weapon-hint">Удерживайте ЛКМ — серия атак · ПКМ — блок</small></div></div>
+        <div id="economy-hud">
+          <div class="economy-actions">
+            <button id="shop-toggle" aria-label="Открыть магазин"><span>ЗОЛОТО</span><b id="gold-count">600</b><small><kbd>B</kbd> магазин · +<i id="gold-rate">3</i>/сек</small></button>
+            <button id="potion-quick" aria-label="Использовать лечебное зелье"><span>🧪</span><b id="potion-count">0</b><small><kbd>H</kbd> лечиться</small></button>
+          </div>
+          <div id="inventory-bar" aria-label="Инвентарь"></div>
+        </div>
         <div id="crosshair"><i></i><i></i><i></i><i></i></div>
         <div id="damage-vignette"></div>
         <div id="interaction" class="hidden"><kbd>E</kbd><span>Поднять знамя</span></div>
@@ -106,6 +113,22 @@
         <button id="chat-toggle" class="hidden" aria-label="Открыть чат">↵</button>
         <button id="settings-toggle" aria-label="Настройки">⚙</button>
       </div>
+
+      <section id="shop" class="screen" aria-labelledby="shop-title">
+        <div class="shop-panel">
+          <button id="shop-close" class="close-button" aria-label="Закрыть магазин">×</button>
+          <header class="shop-header">
+            <div><div class="eyebrow">ПОХОДНАЯ ЛАВКА</div><h2 id="shop-title">Арсенал</h2><p>Покупай компоненты и собирай из них уникальные предметы. Экономика действует до конца текущей битвы.</p></div>
+            <div class="shop-wallet"><span>В КОШЕЛЬКЕ</span><b><i id="shop-gold">600</i> 🜚</b><small>Пассивный доход приостанавливается вместе с битвой</small></div>
+          </header>
+          <p id="shop-status" class="shop-status" aria-live="polite">Обычные предметы занимают слот. При сборке уникального предмета его компоненты исчезнут.</p>
+          <div class="shop-groups">
+            <section><div class="shop-section-title"><span>ОБЫЧНЫЕ И РАСХОДУЕМЫЕ</span><small>Купить сразу</small></div><div id="shop-common" class="shop-grid"></div></section>
+            <section><div class="shop-section-title"><span>УНИКАЛЬНЫЕ СБОРКИ</span><small>Нужны компоненты + цена сборки</small></div><div id="shop-unique" class="shop-grid"></div></section>
+          </div>
+          <footer class="shop-footer"><span><kbd>B</kbd> закрыть магазин</span><span><kbd>H</kbd> использовать зелье</span><span>Инвентарь: <b id="shop-slots">0/6</b></span></footer>
+        </div>
+      </section>
 
       <section id="pause" class="screen" aria-labelledby="pause-title">
         <div class="panel pause-panel">
@@ -123,7 +146,16 @@
       </section>
 
       <div id="mobile-controls" class="hidden">
-        <div id="joystick"><i></i></div><button id="mobile-block">ЩИТ</button><button id="mobile-attack">УДАР</button><button id="mobile-dodge">↝</button>
+        <div id="mobile-look" aria-label="Область управления камерой"><span>СВАЙП · КАМЕРА</span></div>
+        <div id="joystick" aria-label="Джойстик движения"><i></i><span>ДВИЖЕНИЕ</span></div>
+        <button id="mobile-sprint" aria-label="Удерживать для бега">БЕГ</button>
+        <button id="mobile-shop">МАГАЗИН</button>
+        <button id="mobile-potion">ЗЕЛЬЕ</button>
+        <button id="mobile-camera">КАМЕРА</button>
+        <button id="mobile-interact" class="hidden">ДЕЙСТВИЕ</button>
+        <button id="mobile-block">ЩИТ</button>
+        <button id="mobile-attack">УДАР</button>
+        <button id="mobile-dodge" aria-label="Рывок">↝</button>
       </div>
 
       <div id="loading"><img class="loader-emblem" src="/favicon.png" alt="" aria-hidden="true" /><div class="loader-line"><i></i></div><span>ОСНАЩАЕМ ЛЕГИОН</span></div>

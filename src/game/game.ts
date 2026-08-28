@@ -31,6 +31,21 @@ import {
   type MeleeAttackProfile,
 } from './combat';
 import { applyDestructibleDamage, pointHitsObstacle, radialDestructibleDamage, segmentHitsObstacle } from './destruction';
+import {
+  GOLD_PER_SECOND,
+  advanceEconomy,
+  consumeHealingPotion,
+  createEconomyState,
+  getInventoryStats,
+  grantGold,
+  killBounty,
+  purchaseItem as buyEconomyItem,
+  type EconomyActionResult,
+  type EconomyState,
+  type InventorySlot,
+  type ItemId,
+  type PlayerItemStats,
+} from './economy';
 import { mountGeneratedLevelProps } from './generatedProps';
 import { LEVELS, type LevelDefinition } from './levels';
 import { KnightRig, createRemoteKnight, type RigAction } from './models';
@@ -70,6 +85,10 @@ export interface HudState {
   allyCitadelHealth?: number;
   enemyCitadelHealth?: number;
   citadelWave?: number;
+  gold: number;
+  goldPerSecond: number;
+  inventory: readonly InventorySlot[];
+  itemStats: PlayerItemStats;
 }
 
 export interface GameStats {
@@ -235,6 +254,8 @@ export class SiegeGame {
   private elapsed = 0;
   private kills = 0;
   private damageDone = 0;
+  private economy: EconomyState = createEconomyState();
+  private playerItemStats: PlayerItemStats = getInventoryStats([]);
   private ramStrikeTimer = 0;
   private ramVelocityZ = 0;
   private allyCitadelHealth = CITADEL_MAX_HEALTH;
@@ -257,6 +278,8 @@ export class SiegeGame {
   private lastHud = 0;
   private lastPointerLock = false;
   private primaryAttackHeld = false;
+  private mobileSprint = false;
+  private mobileInteract = false;
   private isMobile = matchMedia('(pointer: coarse)').matches;
   private joystick = new THREE.Vector2();
   private quality: 'high' | 'medium' | 'low' = 'high';
@@ -293,6 +316,8 @@ export class SiegeGame {
     this.elapsed = 0;
     this.lastPointerLock = false;
     this.primaryAttackHeld = false;
+    this.mobileSprint = false;
+    this.mobileInteract = false;
     this.audio.horn();
     if (!this.isMobile) this.lockPointer();
     this.emitHud(true);
@@ -301,6 +326,10 @@ export class SiegeGame {
   pause(): void {
     if (this.mode !== 'running') return;
     this.primaryAttackHeld = false;
+    this.mobileSprint = false;
+    this.mobileInteract = false;
+    this.joystick.set(0, 0);
+    this.setBlock(false);
     this.mode = 'paused';
     if (document.pointerLockElement) document.exitPointerLock();
   }
@@ -308,6 +337,8 @@ export class SiegeGame {
   resume(): void {
     if (this.mode !== 'paused') return;
     this.primaryAttackHeld = false;
+    this.mobileSprint = false;
+    this.mobileInteract = false;
     this.mode = 'running';
     if (!this.isMobile) this.lockPointer();
   }
@@ -325,6 +356,8 @@ export class SiegeGame {
     this.reservesDeployed = false;
     this.kills = 0;
     this.damageDone = 0;
+    this.economy = createEconomyState();
+    this.playerItemStats = getInventoryStats([]);
     this.elapsed = 0;
     this.respawnTimer = 0;
     this.jumpTimer = 0;
@@ -372,8 +405,49 @@ export class SiegeGame {
 
   setJoystick(x: number, y: number): void { this.joystick.set(clamp(x, -1, 1), clamp(y, -1, 1)); }
   attack(): void { this.playerAttack(); }
+  setAttackHeld(held: boolean): void {
+    this.primaryAttackHeld = held;
+    if (held) this.playerAttack();
+  }
   setBlock(blocking: boolean): void { if (!this.player.dead && this.jumpTimer <= 0) this.player.action = blocking ? 'block' : 'idle'; }
+  setSprint(sprinting: boolean): void { this.mobileSprint = sprinting; }
+  setInteract(interacting: boolean): void { this.mobileInteract = interacting; }
+  rotateCamera(yawDelta: number, pitchDelta: number): void {
+    if (this.mode !== 'running') return;
+    this.yaw += yawDelta;
+    this.pitch = clamp(this.pitch + pitchDelta, -0.62, 0.42);
+  }
+  switchCameraShoulder(): void { this.cameraShoulder *= -1; }
   dodge(): void { this.playerDodge(); }
+  isRunning(): boolean { return this.mode === 'running'; }
+
+  getEconomyState(): EconomyState {
+    return { ...this.economy, inventory: this.economy.inventory.map((slot) => ({ ...slot })) };
+  }
+
+  purchaseItem(itemId: ItemId): EconomyActionResult {
+    const result = buyEconomyItem(this.economy, itemId);
+    if (!result.ok) return result;
+    this.economy = result.state;
+    this.applyPlayerItemStats();
+    this.events.onFeed(`<b>${result.message}</b>`);
+    this.emitHud(true);
+    return result;
+  }
+
+  useHealingPotion(): EconomyActionResult {
+    if (this.player.dead) return { ok: false, state: this.economy, message: 'Нельзя использовать зелье после гибели.' };
+    const result = consumeHealingPotion(this.economy, this.player.maxHealth - this.player.health);
+    if (!result.ok) {
+      this.events.onFeed(`<b>${result.message}</b>`);
+      return result;
+    }
+    this.economy = result.state;
+    this.player.health = Math.min(this.player.maxHealth, this.player.health + (result.healed ?? 0));
+    this.events.onFeed(`<b>${result.message}</b>`);
+    this.emitHud(true);
+    return result;
+  }
 
   syncRemotePlayers(players: NetworkPlayer[], localId: string): void {
     const active = new Set<string>();
@@ -1546,6 +1620,9 @@ export class SiegeGame {
     window.addEventListener('blur', () => {
       this.keys.clear();
       this.primaryAttackHeld = false;
+      this.mobileSprint = false;
+      this.mobileInteract = false;
+      this.joystick.set(0, 0);
       this.setBlock(false);
     });
     document.addEventListener('mousemove', (event) => {
@@ -1614,6 +1691,7 @@ export class SiegeGame {
 
   private updateGame(time: number, delta: number): void {
     this.elapsed += delta;
+    this.economy = advanceEconomy(this.economy, delta);
     this.updatePlayer(delta);
     this.updateObjectives(delta);
     this.updateActors(time, delta);
@@ -1641,6 +1719,9 @@ export class SiegeGame {
 
   private updatePlayer(delta: number): void {
     if (this.player.dead) return;
+    if (this.playerItemStats.healthRegen > 0) {
+      this.player.health = Math.min(this.player.maxHealth, this.player.health + this.playerItemStats.healthRegen * delta);
+    }
     this.player.cooldown = Math.max(0, this.player.cooldown - delta);
     this.player.actionTime += delta;
     if (this.player.action === 'attack') {
@@ -1688,7 +1769,7 @@ export class SiegeGame {
       return;
     }
     this.player.rig.setVerticalOffset(0);
-    const sprint = this.keys.has('ShiftLeft') && this.player.stamina > 8 ? 1.38 : 1;
+    const sprint = (this.keys.has('ShiftLeft') || this.mobileSprint) && this.player.stamina > 8 ? 1.38 : 1;
     if (sprint > 1 && inputStrength > 0.01) this.player.stamina = Math.max(0, this.player.stamina - delta * 12);
     const moveSpeed = this.player.speed * sprint * (this.player.action === 'block' ? 0.38 : this.player.action === 'attack' ? 0.32 : 1);
     const direction = movementDirection(inputX, inputZ, this.yaw);
@@ -1751,7 +1832,7 @@ export class SiegeGame {
     } else if (this.phase === 3) {
       if (this.boss.dead) {
         const near = distanceXZ(this.player.rig.root.position, this.banner.position) < 4.2;
-        if (near && this.keys.has('KeyE')) this.captureProgress = Math.min(100, this.captureProgress + delta * 34);
+        if (near && (this.keys.has('KeyE') || this.mobileInteract)) this.captureProgress = Math.min(100, this.captureProgress + delta * 34);
         else this.captureProgress = Math.max(0, this.captureProgress - delta * 5);
         if (this.captureProgress >= 100) this.victory();
       } else this.updateBossAbility(delta);
@@ -2312,7 +2393,9 @@ export class SiegeGame {
         this.audio.block();
       }
     }
-    target.health = Math.max(0, target.health - damage);
+    if (target === this.player) damage *= 1 - this.playerItemStats.damageReduction;
+    const appliedDamage = Math.min(target.health, damage);
+    target.health = Math.max(0, target.health - appliedDamage);
     target.lastAttacker = attacker;
     target.rig.flashDamage();
     const hitPosition = target.rig.root.position.clone().add(new THREE.Vector3(0, 1.2, 0));
@@ -2325,7 +2408,10 @@ export class SiegeGame {
     }
     if (!blocked && kind !== 'explosion') this.audio.hit(target.role === 'boss' || target.role === 'brute');
     if (attacker === this.player) {
-      this.damageDone += damage;
+      this.damageDone += appliedDamage;
+      if (this.playerItemStats.lifesteal > 0 && !this.player.dead) {
+        this.player.health = Math.min(this.player.maxHealth, this.player.health + appliedDamage * this.playerItemStats.lifesteal);
+      }
       if (kind === 'melee') this.cameraShake = Math.max(this.cameraShake, blocked ? 0.1 : 0.16);
     }
     if (target === this.player) {
@@ -2342,7 +2428,9 @@ export class SiegeGame {
     target.rig.setState('dead', 0, 0.016);
     if (attacker === this.player) {
       this.kills += 1;
-      this.events.onFeed(`<b>${target.role === 'boss' ? `${this.level.boss.title} ${this.level.boss.name} повержен` : 'Страж повержен'}</b> · ${Math.round(attacker.damage)} урона`);
+      const bounty = killBounty(target.role);
+      this.economy = grantGold(this.economy, bounty);
+      this.events.onFeed(`<b>${target.role === 'boss' ? `${this.level.boss.title} ${this.level.boss.name} повержен` : 'Страж повержен'}</b> · +${bounty} золота`);
     }
     if (target === this.player) {
       this.jumpTimer = 0;
@@ -3071,6 +3159,7 @@ export class SiegeGame {
         allyCitadelHealth: this.allyCitadelHealth,
         enemyCitadelHealth: this.enemyCitadelHealth,
         citadelWave: this.citadelWave,
+        ...this.economyHudState(),
       });
       return;
     }
@@ -3101,13 +3190,35 @@ export class SiegeGame {
       allies: livingAllies,
       enemies: this.actors.filter((actor) => actor.team === 'enemies' && !actor.dead && (actor !== this.boss || this.phase >= 3)).length,
       interaction: this.phase === 3 && this.boss.dead && distanceXZ(this.player.rig.root.position, this.banner.position) < 4.2,
+      ...this.economyHudState(),
     });
+  }
+
+  private economyHudState(): Pick<HudState, 'gold' | 'goldPerSecond' | 'inventory' | 'itemStats'> {
+    return {
+      gold: this.economy.gold,
+      goldPerSecond: GOLD_PER_SECOND,
+      inventory: this.economy.inventory.map((slot) => ({ ...slot })),
+      itemStats: { ...this.playerItemStats },
+    };
+  }
+
+  private applyPlayerItemStats(): void {
+    const previousMaxHealth = this.player.maxHealth;
+    this.playerItemStats = getInventoryStats(this.economy.inventory);
+    this.player.maxHealth = this.level.playerHealth + this.playerItemStats.maxHealth;
+    this.player.health = Math.min(this.player.maxHealth, this.player.health + Math.max(0, this.player.maxHealth - previousMaxHealth));
+    this.player.damage = this.level.playerDamage + this.playerItemStats.attackDamage;
+    this.player.speed = (this.isCitadelWar ? 5.25 : 4.9) + this.playerItemStats.moveSpeed;
   }
 
   private victory(): void {
     if (this.mode === 'victory') return;
     this.mode = 'victory';
     this.primaryAttackHeld = false;
+    this.mobileSprint = false;
+    this.mobileInteract = false;
+    this.joystick.set(0, 0);
     if (document.pointerLockElement) document.exitPointerLock();
     this.audio.victory();
     this.events.onVictory({ kills: this.kills, duration: this.elapsed, damage: this.damageDone });
@@ -3117,6 +3228,9 @@ export class SiegeGame {
     if (this.mode === 'victory') return;
     this.mode = 'victory';
     this.primaryAttackHeld = false;
+    this.mobileSprint = false;
+    this.mobileInteract = false;
+    this.joystick.set(0, 0);
     if (document.pointerLockElement) document.exitPointerLock();
     this.events.onDefeat({ kills: this.kills, duration: this.elapsed, damage: this.damageDone });
   }

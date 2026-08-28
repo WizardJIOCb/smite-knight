@@ -1,7 +1,19 @@
 import './style.css';
 import { completeCampaignLevel, loadCampaignProgress, nextCampaignLevel, saveCampaignProgress } from './campaign';
+import {
+  INVENTORY_CAPACITY,
+  SHOP_ITEMS,
+  getShopItem,
+  inventoryItemCount,
+  purchaseItem as previewPurchase,
+  totalItemCost,
+  type EconomyState,
+  type InventorySlot,
+  type ShopItem,
+} from './game/economy';
 import { SiegeGame, type HudState } from './game/game';
 import { LEVELS, getLevel, getNextLevel, type LevelDefinition, type LevelId } from './game/levels';
+import { mobileCameraDrag, normalizeMobileJoystick } from './game/mobileControls';
 import { preloadKnightAssets } from './game/models';
 import { NetworkClient } from './network';
 import { loadGameSettings, saveGameSettings } from './settings';
@@ -19,6 +31,7 @@ const mapSelect = element('#map-select');
 const briefing = element('#briefing');
 const pause = element('#pause');
 const ending = element('#ending');
+const shop = element('#shop');
 const hud = element('#hud');
 const loading = element('#loading');
 const mobileControls = element('#mobile-controls');
@@ -42,6 +55,7 @@ volumeInput.value = String(Math.round(settings.volume * 100));
 qualitySelect.value = settings.quality;
 let multiplayer = false;
 let damageTimer = 0;
+let inventorySignature = '__initial__';
 
 const network = new NetworkClient({
   onSnapshot: (snapshot, localId) => {
@@ -61,6 +75,7 @@ const game = new SiegeGame(canvas, {
   onFeed: addFeed,
   onPause: showPause,
   onVictory: (stats) => {
+    shop.classList.remove('active');
     campaign = completeCampaignLevel(campaign, currentLevel.id);
     saveCampaignProgress(campaign);
     renderLevelCards();
@@ -76,6 +91,7 @@ const game = new SiegeGame(canvas, {
     ending.classList.add('active');
   },
   onDefeat: (stats) => {
+    shop.classList.remove('active');
     hud.classList.add('hidden');
     mobileControls.classList.remove('game-active');
     element('#ending-eyebrow').textContent = 'НАША ЦИТАДЕЛЬ ПАЛА';
@@ -211,6 +227,23 @@ element<HTMLFormElement>('#chat-form').addEventListener('submit', (event) => {
   canvas.focus();
 });
 window.addEventListener('keydown', (event) => {
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
+  if (event.code === 'KeyB' && !event.repeat) {
+    event.preventDefault();
+    if (shop.classList.contains('active')) closeShop();
+    else openShop();
+    return;
+  }
+  if (event.code === 'KeyH' && !event.repeat) {
+    event.preventDefault();
+    usePotion();
+    return;
+  }
+  if (event.code === 'Escape' && shop.classList.contains('active')) {
+    event.preventDefault();
+    closeShop();
+    return;
+  }
   if (event.code === 'Enter' && multiplayer && !pause.classList.contains('active')) {
     const input = element<HTMLInputElement>('#chat-input');
     if (document.activeElement === input) return;
@@ -229,27 +262,84 @@ joystick.addEventListener('pointerdown', (event) => {
   updateJoystick(event);
 });
 joystick.addEventListener('pointermove', (event) => { if (event.pointerId === joystickPointer) updateJoystick(event); });
-joystick.addEventListener('pointerup', (event) => {
+const releaseJoystick = (event: PointerEvent): void => {
   if (event.pointerId !== joystickPointer) return;
   joystickPointer = undefined;
   joystickKnob.style.transform = '';
   game.setJoystick(0, 0);
+};
+joystick.addEventListener('pointerup', releaseJoystick);
+joystick.addEventListener('pointercancel', releaseJoystick);
+joystick.addEventListener('lostpointercapture', releaseJoystick);
+
+bindHoldControl('#mobile-attack', (held) => game.setAttackHeld(held));
+bindHoldControl('#mobile-block', (held) => game.setBlock(held));
+bindHoldControl('#mobile-sprint', (held) => game.setSprint(held));
+bindHoldControl('#mobile-interact', (held) => game.setInteract(held));
+element('#mobile-dodge').addEventListener('pointerdown', (event) => { event.preventDefault(); game.dodge(); });
+element('#mobile-shop').addEventListener('pointerdown', (event) => { event.preventDefault(); openShop(); });
+element('#mobile-potion').addEventListener('pointerdown', (event) => { event.preventDefault(); usePotion(); });
+element('#mobile-camera').addEventListener('pointerdown', (event) => { event.preventDefault(); game.switchCameraShoulder(); });
+element('#shop-toggle').addEventListener('click', () => openShop());
+element('#potion-quick').addEventListener('click', () => usePotion());
+element('#shop-close').addEventListener('click', () => closeShop());
+
+const mobileLook = element('#mobile-look');
+let lookPointer: number | undefined;
+let lookX = 0;
+let lookY = 0;
+mobileLook.addEventListener('pointerdown', (event) => {
+  if (!game.isRunning()) return;
+  event.preventDefault();
+  lookPointer = event.pointerId;
+  lookX = event.clientX;
+  lookY = event.clientY;
+  mobileLook.setPointerCapture(event.pointerId);
+  mobileLook.classList.add('active');
 });
-element('#mobile-attack').addEventListener('pointerdown', () => game.attack());
-element('#mobile-block').addEventListener('pointerdown', () => game.setBlock(true));
-element('#mobile-block').addEventListener('pointerup', () => game.setBlock(false));
-element('#mobile-dodge').addEventListener('pointerdown', () => game.dodge());
+mobileLook.addEventListener('pointermove', (event) => {
+  if (event.pointerId !== lookPointer) return;
+  event.preventDefault();
+  const camera = mobileCameraDrag(event.clientX - lookX, event.clientY - lookY);
+  game.rotateCamera(camera.yawDelta, camera.pitchDelta);
+  lookX = event.clientX;
+  lookY = event.clientY;
+});
+const releaseMobileLook = (event: PointerEvent): void => {
+  if (event.pointerId !== lookPointer) return;
+  lookPointer = undefined;
+  mobileLook.classList.remove('active');
+};
+mobileLook.addEventListener('pointerup', releaseMobileLook);
+mobileLook.addEventListener('pointercancel', releaseMobileLook);
+mobileLook.addEventListener('lostpointercapture', releaseMobileLook);
 
 function updateJoystick(event: PointerEvent): void {
   const bounds = joystick.getBoundingClientRect();
-  const x = Math.max(-1, Math.min(1, (event.clientX - bounds.left - bounds.width / 2) / (bounds.width * 0.35)));
-  const y = Math.max(-1, Math.min(1, (event.clientY - bounds.top - bounds.height / 2) / (bounds.height * 0.35)));
-  const length = Math.hypot(x, y);
-  const scale = length > 1 ? 1 / length : 1;
-  const normalizedX = x * scale;
-  const normalizedY = y * scale;
-  joystickKnob.style.transform = `translate(${normalizedX * 28}px, ${normalizedY * 28}px)`;
-  game.setJoystick(normalizedX, normalizedY);
+  const normalized = normalizeMobileJoystick(event.clientX, event.clientY, bounds);
+  joystickKnob.style.transform = `translate(${normalized.x * 34}px, ${normalized.y * 34}px)`;
+  game.setJoystick(normalized.x, normalized.y);
+}
+
+function bindHoldControl(selector: string, onChange: (held: boolean) => void): void {
+  const button = element<HTMLButtonElement>(selector);
+  let pointerId: number | undefined;
+  button.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    pointerId = event.pointerId;
+    button.setPointerCapture(event.pointerId);
+    button.classList.add('pressed');
+    onChange(true);
+  });
+  const release = (event: PointerEvent): void => {
+    if (event.pointerId !== pointerId) return;
+    pointerId = undefined;
+    button.classList.remove('pressed');
+    onChange(false);
+  };
+  button.addEventListener('pointerup', release);
+  button.addEventListener('pointercancel', release);
+  button.addEventListener('lostpointercapture', release);
 }
 
 function showBriefing(): void {
@@ -366,6 +456,21 @@ function updateHud(state: HudState): void {
   element('#objective-fill').style.width = `${state.progress}%`;
   element('#ally-count').textContent = String(state.allies);
   element('#enemy-count').textContent = String(state.enemies);
+  element('#gold-count').textContent = String(state.gold);
+  element('#gold-rate').textContent = String(state.goldPerSecond);
+  element('#potion-count').textContent = String(inventoryItemCount(state.inventory, 'healing-potion'));
+  renderInventory(state.inventory);
+  const signatureItem = state.inventory.find((slot) => getShopItem(slot.itemId).tier === 'unique');
+  element('#weapon-name').textContent = signatureItem ? getShopItem(signatureItem.itemId).name : 'Меч пепла';
+  const bonuses = [
+    state.itemStats.attackDamage ? `+${state.itemStats.attackDamage} урон` : '',
+    state.itemStats.maxHealth ? `+${state.itemStats.maxHealth} здоровье` : '',
+    state.itemStats.moveSpeed ? `+${state.itemStats.moveSpeed.toFixed(2)} скорость` : '',
+    state.itemStats.damageReduction ? `${Math.round(state.itemStats.damageReduction * 100)}% защита` : '',
+    state.itemStats.lifesteal ? `${Math.round(state.itemStats.lifesteal * 100)}% вампиризм` : '',
+    state.itemStats.healthRegen ? `+${state.itemStats.healthRegen.toFixed(1)} регенерация` : '',
+  ].filter(Boolean);
+  element('#weapon-hint').textContent = bonuses.length ? bonuses.join(' · ') : 'Удерживайте ЛКМ — серия атак · ПКМ — блок';
   const citadelScore = element('#citadel-score');
   const isCitadelWar = state.allyCitadelHealth !== undefined && state.enemyCitadelHealth !== undefined;
   citadelScore.classList.toggle('hidden', !isCitadelWar);
@@ -378,6 +483,111 @@ function updateHud(state: HudState): void {
     element('#citadel-wave').textContent = `ВОЛНА ${state.citadelWave ?? 1}`;
   }
   interaction.classList.toggle('hidden', !state.interaction);
+  element('#mobile-interact').classList.toggle('hidden', !state.interaction);
+}
+
+function renderInventory(inventory: readonly InventorySlot[]): void {
+  const signature = inventory.map((slot) => `${slot.itemId}:${slot.quantity}`).join('|');
+  if (signature === inventorySignature) return;
+  inventorySignature = signature;
+  const slots = Array.from({ length: INVENTORY_CAPACITY }, (_, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'inventory-slot';
+    const slot = inventory[index];
+    if (!slot) {
+      button.classList.add('empty');
+      button.disabled = true;
+      button.setAttribute('aria-label', `Пустой слот ${index + 1}`);
+      return button;
+    }
+    const item = getShopItem(slot.itemId);
+    button.classList.add(item.tier);
+    button.textContent = item.icon;
+    button.title = `${item.name}: ${item.description}`;
+    button.setAttribute('aria-label', `${item.name}, ${slot.quantity}`);
+    if (slot.quantity > 1) {
+      const quantity = document.createElement('em');
+      quantity.textContent = String(slot.quantity);
+      button.append(quantity);
+    }
+    if (slot.itemId === 'healing-potion') button.addEventListener('click', () => usePotion());
+    return button;
+  });
+  element('#inventory-bar').replaceChildren(...slots);
+}
+
+function openShop(): void {
+  if (!game.isRunning() || hud.classList.contains('hidden')) return;
+  game.pause();
+  renderShop();
+  element('#shop-status').className = 'shop-status';
+  element('#shop-status').textContent = 'Обычные предметы занимают слот. При сборке уникального предмета его компоненты исчезнут.';
+  shop.classList.add('active');
+}
+
+function closeShop(): void {
+  if (!shop.classList.contains('active')) return;
+  shop.classList.remove('active');
+  game.resume();
+}
+
+function usePotion(): void {
+  const result = game.useHealingPotion();
+  if (shop.classList.contains('active')) {
+    setShopStatus(result.message, result.ok);
+    renderShop();
+  }
+}
+
+function renderShop(): void {
+  const state = game.getEconomyState();
+  element('#shop-gold').textContent = String(state.gold);
+  element('#shop-slots').textContent = `${state.inventory.length}/${INVENTORY_CAPACITY}`;
+  const common = SHOP_ITEMS.filter((item) => item.tier !== 'unique').map((item) => createShopCard(item, state));
+  const unique = SHOP_ITEMS.filter((item) => item.tier === 'unique').map((item) => createShopCard(item, state));
+  element('#shop-common').replaceChildren(...common);
+  element('#shop-unique').replaceChildren(...unique);
+}
+
+function createShopCard(item: ShopItem, state: EconomyState): HTMLElement {
+  const card = document.createElement('article');
+  card.className = `shop-item ${item.tier}`;
+  card.dataset.itemId = item.id;
+  const icon = document.createElement('span');
+  icon.className = 'shop-item-icon';
+  icon.textContent = item.icon;
+  const title = document.createElement('h3');
+  title.textContent = item.name;
+  const description = document.createElement('p');
+  description.textContent = item.description;
+  const recipe = document.createElement('div');
+  recipe.className = 'shop-recipe';
+  if (item.recipe) {
+    recipe.textContent = `Нужно: ${item.recipe.map((id) => `${getShopItem(id).icon} ${getShopItem(id).name}`).join(' + ')} · полная цена ${totalItemCost(item)}`;
+  } else {
+    recipe.textContent = item.tier === 'consumable' ? 'Расходуемый предмет' : 'Компонент для уникальных сборок';
+  }
+  const buy = document.createElement('button');
+  buy.type = 'button';
+  buy.className = 'shop-buy';
+  buy.textContent = `${item.recipe ? 'СОБРАТЬ' : 'КУПИТЬ'} · ${item.cost} 🜚`;
+  const preview = previewPurchase(state, item.id);
+  buy.disabled = !preview.ok;
+  buy.title = preview.ok ? `${item.recipe ? 'Собрать' : 'Купить'} ${item.name}` : preview.message;
+  buy.addEventListener('click', () => {
+    const result = game.purchaseItem(item.id);
+    setShopStatus(result.message, result.ok);
+    renderShop();
+  });
+  card.append(icon, title, description, recipe, buy);
+  return card;
+}
+
+function setShopStatus(message: string, success: boolean): void {
+  const status = element('#shop-status');
+  status.textContent = message;
+  status.className = `shop-status ${success ? 'success' : 'error'}`;
 }
 
 function addFeed(message: string): void {

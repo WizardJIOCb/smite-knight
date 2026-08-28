@@ -137,7 +137,8 @@ renderHeroSelect();
 if (new URLSearchParams(location.search).get('briefing') === '1') showBriefing();
 
 const minimumLoadingTime = new Promise<void>((resolve) => window.setTimeout(resolve, 700));
-void Promise.all([preloadKnightAssets(), minimumLoadingTime]).finally(() => loading.classList.add('ready'));
+void preloadKnightAssets();
+void minimumLoadingTime.finally(() => loading.classList.add('ready'));
 
 element<HTMLButtonElement>('#play-solo').addEventListener('click', () => {
   multiplayer = false;

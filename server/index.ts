@@ -129,6 +129,19 @@ httpServer.listen(port, '127.0.0.1', () => {
   process.stdout.write(`SMITE KNIGHT listening on http://127.0.0.1:${port}\n`);
 });
 
-const shutdown = () => httpServer.close(() => process.exit(0));
+let shutdownStarted = false;
+const shutdown = () => {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  const forceExit = setTimeout(() => process.exit(1), 5_000);
+  forceExit.unref();
+  io.close(() => {
+    if (!httpServer.listening) {
+      process.exit(0);
+      return;
+    }
+    httpServer.close(() => process.exit(0));
+  });
+};
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { angleDelta, clamp, dampAngle, movementDirection, pointInAttackArc, seededRandom, setRightPerpendicular, smoothstep } from './math';
+import { angleDelta, clamp, dampAngle, movementDirection, pointInAttackArc, ramEscortOffset, seededRandom, setRightPerpendicular, smoothstep } from './math';
 
 describe('game math', () => {
   it('clamps and smooths normalized values', () => {
@@ -59,5 +59,21 @@ describe('game math', () => {
     expect(left).toEqual(expect.objectContaining({ x: expect.closeTo(-1, 5), z: expect.closeTo(0, 5) }));
     expect(backwardRight).toEqual(expect.objectContaining({ x: expect.closeTo(Math.SQRT1_2, 5), z: expect.closeTo(Math.SQRT1_2, 5) }));
     expect(movementDirection(0, 0, cameraForward)).toBeUndefined();
+  });
+
+  it('gives every ram escort a stable non-overlapping place beside the ram', () => {
+    const slots = Array.from({ length: 22 }, (_, index) => ramEscortOffset(index));
+    expect(new Set(slots.map(({ x, z }) => `${x}:${z}`)).size).toBe(22);
+    expect(slots.filter(({ x }) => x < 0)).toHaveLength(11);
+    expect(slots.filter(({ x }) => x > 0)).toHaveLength(11);
+    expect(slots.every(({ x }) => Math.abs(x) > 2.3)).toBe(true);
+
+    let minimumDistance = Number.POSITIVE_INFINITY;
+    for (let first = 0; first < slots.length; first += 1) {
+      for (let second = first + 1; second < slots.length; second += 1) {
+        minimumDistance = Math.min(minimumDistance, Math.hypot(slots[first].x - slots[second].x, slots[first].z - slots[second].z));
+      }
+    }
+    expect(minimumDistance).toBeGreaterThanOrEqual(1.75);
   });
 });

@@ -14,6 +14,7 @@ import {
   distanceXZ,
   movementDirection,
   pointInAttackArc,
+  ramEscortOffset,
   seededRandom,
   smoothstep,
 } from './math';
@@ -1069,7 +1070,9 @@ export class SiegeGame {
         const direction = this.temp.subVectors(destination, actor.rig.root.position);
         direction.y = 0;
         if (direction.lengthSq() > 1) {
-          direction.normalize();
+          const separation = this.computeSeparation(actor).multiplyScalar(1.25);
+          direction.normalize().add(separation);
+          if (direction.lengthSq() > 1) direction.normalize();
           actor.rig.root.position.addScaledVector(direction, actor.speed * delta * 0.72);
           actor.rig.root.rotation.y = dampAngle(actor.rig.root.rotation.y, Math.atan2(direction.x, direction.z), 6, delta);
           actor.action = 'run';
@@ -1117,7 +1120,10 @@ export class SiegeGame {
     const index = Number(actor.id.split('-').at(-1));
     const lane = (index % 5 - 2) * 1.8;
     if (actor.team === 'allies') {
-      if (this.phase < 2) return new THREE.Vector3(lane, 0, this.ram.position.z + 4);
+      if (this.phase < 2) {
+        const escort = ramEscortOffset(index - 1);
+        return new THREE.Vector3(this.ram.position.x + escort.x, 0, this.ram.position.z + escort.z);
+      }
       if (actor.rig.root.position.z > CASTLE_LIMITS.firstStairEndZ) return new THREE.Vector3(lane, 0, -49);
       if (actor.rig.root.position.z > CASTLE_LIMITS.secondStairEndZ) return new THREE.Vector3(lane * 0.78, 0, -67);
       return new THREE.Vector3(lane * 1.15, 0, -69.5);
@@ -1131,11 +1137,13 @@ export class SiegeGame {
 
   private computeSeparation(actor: Actor): THREE.Vector3 {
     const force = new THREE.Vector3();
+    const minimumSpacing = actor.team === 'allies' && this.phase < 2 ? 1.35 : 1.05;
     for (const other of this.actors) {
       if (other === actor || other.dead) continue;
+      if (Math.abs(actor.rig.root.position.y - other.rig.root.position.y) > 2.5) continue;
       const distance = distanceXZ(actor.rig.root.position, other.rig.root.position);
-      if (distance > 0 && distance < 0.95) {
-        force.add(this.temp2.subVectors(actor.rig.root.position, other.rig.root.position).setY(0).normalize().multiplyScalar((0.95 - distance) * 0.8));
+      if (distance > 0 && distance < minimumSpacing) {
+        force.add(this.temp2.subVectors(actor.rig.root.position, other.rig.root.position).setY(0).normalize().multiplyScalar((minimumSpacing - distance) * 1.1));
       }
     }
     return force;

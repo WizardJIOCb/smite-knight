@@ -41,6 +41,17 @@ export function movementDirection(inputX: number, inputZ: number, yaw: number): 
   return { x: x / worldLength, z: z / worldLength };
 }
 
+export function ramEscortOffset(slot: number): { x: number; z: number } {
+  const safeSlot = Math.max(0, Math.floor(slot));
+  const columns = [-2.75, 2.75, -4.55, 4.55] as const;
+  const column = safeSlot % columns.length;
+  const row = Math.floor(safeSlot / columns.length);
+  return {
+    x: columns[column],
+    z: (row - 2) * 1.75,
+  };
+}
+
 export function angleDelta(from: number, to: number): number {
   return Math.atan2(Math.sin(to - from), Math.cos(to - from));
 }

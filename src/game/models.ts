@@ -3,7 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { clamp, damp } from './math';
 
-export type RigAction = 'idle' | 'run' | 'attack' | 'block' | 'dead';
+export type RigAction = 'idle' | 'run' | 'jump' | 'attack' | 'block' | 'dead';
 
 type KnightTeam = 'allies' | 'enemies';
 type KnightRole = 'soldier' | 'archer' | 'brute' | 'boss';
@@ -14,6 +14,7 @@ interface DetailedKnightAsset {
   animations: THREE.AnimationClip[];
   crossbow: THREE.Group;
   factionTextures: Record<FactionPalette, THREE.Texture>;
+  skinTexture: THREE.Texture;
 }
 
 const DETAILED_KNIGHT_URL = '/assets/kaykit/knight.glb';
@@ -22,6 +23,7 @@ const clipNames: Record<KnightRole, Record<RigAction, string>> = {
   soldier: {
     idle: 'Idle',
     run: 'Running_A',
+    jump: 'Jump_Full_Short',
     attack: '1H_Melee_Attack_Slice_Diagonal',
     block: 'Blocking',
     dead: 'Death_A',
@@ -29,6 +31,7 @@ const clipNames: Record<KnightRole, Record<RigAction, string>> = {
   archer: {
     idle: 'Idle',
     run: 'Running_A',
+    jump: 'Jump_Full_Short',
     attack: '2H_Ranged_Shoot',
     block: '2H_Ranged_Aiming',
     dead: 'Death_A',
@@ -36,6 +39,7 @@ const clipNames: Record<KnightRole, Record<RigAction, string>> = {
   brute: {
     idle: '2H_Melee_Idle',
     run: 'Running_B',
+    jump: 'Jump_Full_Short',
     attack: '2H_Melee_Attack_Spin',
     block: 'Blocking',
     dead: 'Death_A',
@@ -43,6 +47,7 @@ const clipNames: Record<KnightRole, Record<RigAction, string>> = {
   boss: {
     idle: '2H_Melee_Idle',
     run: 'Running_B',
+    jump: 'Jump_Full_Short',
     attack: '2H_Melee_Attack_Spin',
     block: 'Blocking',
     dead: 'Death_B',
@@ -105,6 +110,7 @@ function loadDetailedKnightAsset(): Promise<DetailedKnightAsset> {
       scene: knight.scene,
       animations: knight.animations,
       crossbow: crossbow.scene,
+      skinTexture: recolorFactionTexture(sourceTexture, [188, 126, 89]),
       factionTextures: {
         allies: recolorFactionTexture(sourceTexture, [38, 126, 148]),
         enemies: recolorFactionTexture(sourceTexture, [151, 35, 47]),
@@ -185,6 +191,7 @@ export class KnightRig {
   private speed = 0;
   private damageFlash = 0;
   private groundHeight = 0;
+  private verticalOffset = 0;
   private readonly armorMeshes: THREE.Mesh[] = [];
   private detailedModel?: THREE.Group;
   private mixer?: THREE.AnimationMixer;
@@ -277,7 +284,7 @@ export class KnightRig {
 
   setState(action: RigAction, speed: number, delta: number): void {
     if (action !== this.action) {
-      if (action === 'attack') this.attackClock = 0;
+      if (action === 'attack' || action === 'jump') this.attackClock = 0;
       if (action === 'dead') this.deathClock = 0;
       this.action = action;
       this.playDetailedAction(action);
@@ -291,7 +298,11 @@ export class KnightRig {
 
   setGroundHeight(height: number): void {
     this.groundHeight = height;
-    if (this.action !== 'dead') this.root.position.y = height;
+    if (this.action !== 'dead') this.root.position.y = height + this.verticalOffset;
+  }
+
+  setVerticalOffset(offset: number): void {
+    this.verticalOffset = Math.max(0, offset);
   }
 
   update(time: number, delta: number): void {
@@ -328,6 +339,13 @@ export class KnightRig {
       leftArmX = -1.25;
       leftArmZ = -0.42;
       rightArmX = -0.45;
+    } else if (this.action === 'jump') {
+      const tuck = Math.sin(clamp(this.attackClock / 0.36, 0, 1) * Math.PI);
+      leftArmX = -0.45 - tuck * 0.55;
+      rightArmX = -0.35 - tuck * 0.65;
+      this.leftLeg.rotation.x = damp(this.leftLeg.rotation.x, 0.45 * tuck, 18, delta);
+      this.rightLeg.rotation.x = damp(this.rightLeg.rotation.x, -0.32 * tuck, 18, delta);
+      bodyX = -0.14 * tuck;
     } else if (this.action === 'dead') {
       const fall = clamp(this.deathClock * 1.9, 0, 1);
       if (!this.detailedModel) {
@@ -337,7 +355,7 @@ export class KnightRig {
       bodyY = -0.12 * fall;
     } else {
       this.root.rotation.z = damp(this.root.rotation.z, 0, 7, delta);
-      this.root.position.y = damp(this.root.position.y, this.groundHeight, 14, delta);
+      this.root.position.y = damp(this.root.position.y, this.groundHeight + this.verticalOffset, 18, delta);
     }
 
     this.rightArm.rotation.x = damp(this.rightArm.rotation.x, rightArmX, 16, delta);
@@ -398,18 +416,19 @@ export class KnightRig {
     model.scale.setScalar(0.78);
 
     const palette: FactionPalette = this.role === 'boss' ? 'boss' : this.team;
-    const materialClones = new Map<THREE.Material, THREE.Material>();
-    const cloneMaterial = (source: THREE.Material): THREE.Material => {
-      const cached = materialClones.get(source);
+    const materialClones = new Map<string, THREE.Material>();
+    const cloneMaterial = (source: THREE.Material, face = false): THREE.Material => {
+      const key = `${source.uuid}:${face ? 'face' : 'faction'}`;
+      const cached = materialClones.get(key);
       if (cached) return cached;
       if (!(source instanceof THREE.MeshStandardMaterial)) return source;
       const material = source.clone();
-      material.map = asset.factionTextures[palette];
-      material.roughness = this.role === 'boss' ? 0.34 : 0.48;
-      material.metalness = this.role === 'boss' ? 0.24 : 0.12;
-      material.emissive.set(this.role === 'boss' ? 0x481007 : 0xff5a31);
-      material.emissiveIntensity = this.role === 'boss' ? 0.14 : 0;
-      materialClones.set(source, material);
+      material.map = face && this.role !== 'boss' ? asset.skinTexture : asset.factionTextures[palette];
+      material.roughness = face ? 0.78 : this.role === 'boss' ? 0.34 : 0.48;
+      material.metalness = face ? 0.01 : this.role === 'boss' ? 0.24 : 0.12;
+      material.emissive.set(face ? 0x000000 : this.role === 'boss' ? 0x481007 : 0xff5a31);
+      material.emissiveIntensity = face ? 0 : this.role === 'boss' ? 0.14 : 0;
+      materialClones.set(key, material);
       this.detailedMaterials.push(material);
       return material;
     };
@@ -419,9 +438,10 @@ export class KnightRig {
       object.castShadow = true;
       object.receiveShadow = true;
       object.frustumCulled = true;
+      const face = object.name === 'Knight_Head';
       object.material = Array.isArray(object.material)
-        ? object.material.map(cloneMaterial)
-        : cloneMaterial(object.material);
+        ? object.material.map((material) => cloneMaterial(material, face))
+        : cloneMaterial(object.material, face);
     });
 
     const accessoryNames = [

@@ -35,3 +35,10 @@ export function castleGroundHeight(x: number, z: number): number {
   }
   return CASTLE_LIMITS.summitHeight;
 }
+
+export function battlefieldSurfaceAt(x: number, z: number): 'earth' | 'stone' {
+  const insideOuterWalls = z < CASTLE_LIMITS.outerGateZ - 3.4
+    && z > CASTLE_LIMITS.backWallZ + 1.5
+    && Math.abs(x) < 25.4;
+  return insideOuterWalls ? 'stone' : 'earth';
+}

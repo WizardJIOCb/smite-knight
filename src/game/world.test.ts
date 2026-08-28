@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CASTLE_LIMITS, castleGroundHeight } from './world';
+import { battlefieldSurfaceAt, CASTLE_LIMITS, castleGroundHeight } from './world';
 
 describe('multi-tier castle terrain', () => {
   it('raises actors smoothly across both staircases', () => {
@@ -14,5 +14,11 @@ describe('multi-tier castle terrain', () => {
   it('keeps the ground outside the castle terraces at battlefield height', () => {
     expect(castleGroundHeight(20, -50)).toBe(0);
     expect(castleGroundHeight(0, -90)).toBe(0);
+  });
+
+  it('distinguishes stone courtyards from the earthen battlefield', () => {
+    expect(battlefieldSurfaceAt(0, -52)).toBe('stone');
+    expect(battlefieldSurfaceAt(0, -12)).toBe('earth');
+    expect(battlefieldSurfaceAt(30, -52)).toBe('earth');
   });
 });

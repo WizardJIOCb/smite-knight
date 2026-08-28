@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { angleDelta, clamp, dampAngle, pointInAttackArc, seededRandom, setRightPerpendicular, smoothstep } from './math';
+import { angleDelta, clamp, dampAngle, movementDirection, pointInAttackArc, seededRandom, setRightPerpendicular, smoothstep } from './math';
 
 describe('game math', () => {
   it('clamps and smooths normalized values', () => {
@@ -48,5 +48,16 @@ describe('game math', () => {
     const right = setRightPerpendicular(target, { x: 0, z: -1 });
     expect({ x: right.x, z: right.z }).toEqual({ x: 1, z: 0 });
     expect({ x: -right.x, z: -right.z }).toEqual({ x: -1, z: -0 });
+  });
+
+  it('uses the movement input for a jump instead of always following the camera', () => {
+    const cameraForward = Math.PI;
+    const forward = movementDirection(0, 1, cameraForward);
+    const left = movementDirection(-1, 0, cameraForward);
+    const backwardRight = movementDirection(1, -1, cameraForward);
+    expect(forward).toEqual(expect.objectContaining({ x: expect.closeTo(0, 5), z: expect.closeTo(-1, 5) }));
+    expect(left).toEqual(expect.objectContaining({ x: expect.closeTo(-1, 5), z: expect.closeTo(0, 5) }));
+    expect(backwardRight).toEqual(expect.objectContaining({ x: expect.closeTo(Math.SQRT1_2, 5), z: expect.closeTo(Math.SQRT1_2, 5) }));
+    expect(movementDirection(0, 0, cameraForward)).toBeUndefined();
   });
 });

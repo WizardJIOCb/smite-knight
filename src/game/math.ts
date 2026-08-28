@@ -26,6 +26,21 @@ export function setRightPerpendicular<T extends { set: (x: number, y: number, z:
   return target.set(-forward.z, 0, forward.x);
 }
 
+export function movementDirection(inputX: number, inputZ: number, yaw: number): { x: number; z: number } | undefined {
+  const length = Math.hypot(inputX, inputZ);
+  if (length < 0.001) return undefined;
+  const normalizedX = inputX / Math.max(1, length);
+  const normalizedZ = inputZ / Math.max(1, length);
+  const forwardX = Math.sin(yaw);
+  const forwardZ = Math.cos(yaw);
+  const rightX = -forwardZ;
+  const rightZ = forwardX;
+  const x = forwardX * normalizedZ + rightX * normalizedX;
+  const z = forwardZ * normalizedZ + rightZ * normalizedX;
+  const worldLength = Math.hypot(x, z) || 1;
+  return { x: x / worldLength, z: z / worldLength };
+}
+
 export function angleDelta(from: number, to: number): number {
   return Math.atan2(Math.sin(to - from), Math.cos(to - from));
 }

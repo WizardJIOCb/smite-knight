@@ -16,9 +16,17 @@ describe('room safety helpers', () => {
     const player = createPlayer('one', 'Knight', 0);
     const next = safePlayerUpdate(player, { x: 999, z: -999, health: -5, action: 'attack' });
     expect(next.x).toBe(44);
-    expect(next.z).toBe(-45);
+    expect(next.z).toBe(-76);
     expect(next.health).toBe(0);
     expect(next.action).toBe('attack');
     expect(next.name).toBe('Knight');
+  });
+
+  it('accepts the jump animation for remote players on the upper castle tier', () => {
+    const player = createPlayer('two', 'Jumper', 1);
+    const next = safePlayerUpdate(player, { z: -70, y: 6.5, action: 'jump' });
+    expect(next.z).toBe(-70);
+    expect(next.y).toBe(6.5);
+    expect(next.action).toBe('jump');
   });
 });

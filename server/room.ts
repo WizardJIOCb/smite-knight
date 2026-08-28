@@ -67,12 +67,12 @@ export function snapshotRoom(room: ServerRoom): RoomSnapshot {
 export function safePlayerUpdate(previous: NetworkPlayer, payload: Partial<NetworkPlayer>): NetworkPlayer {
   const clamp = (value: unknown, min: number, max: number, fallback: number) =>
     typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
-  const actions: NetworkPlayer['action'][] = ['idle', 'run', 'attack', 'block', 'dead'];
+  const actions: NetworkPlayer['action'][] = ['idle', 'run', 'jump', 'attack', 'block', 'dead'];
   return {
     ...previous,
     x: clamp(payload.x, -44, 44, previous.x),
     y: clamp(payload.y, -2, 12, previous.y),
-    z: clamp(payload.z, -45, 44, previous.z),
+    z: clamp(payload.z, -76, 44, previous.z),
     rotation: clamp(payload.rotation, -Math.PI * 4, Math.PI * 4, previous.rotation),
     health: clamp(payload.health, 0, 180, previous.health),
     action: actions.includes(payload.action as NetworkPlayer['action']) ? payload.action as NetworkPlayer['action'] : previous.action,

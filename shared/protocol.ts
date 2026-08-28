@@ -8,7 +8,7 @@ export interface NetworkPlayer {
   z: number;
   rotation: number;
   health: number;
-  action: 'idle' | 'run' | 'attack' | 'block' | 'dead';
+  action: 'idle' | 'run' | 'jump' | 'attack' | 'block' | 'dead';
 }
 
 export interface RoomSnapshot {

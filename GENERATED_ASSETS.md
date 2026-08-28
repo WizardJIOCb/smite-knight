@@ -33,12 +33,13 @@ inspection.
 
 ## Favicon
 
-The favicon was generated on 2026-08-29 with the built-in OpenAI image generation tool, then simplified
-and reviewed at its actual 16 px and 32 px sizes. The accepted mark uses a front-facing pale knight helmet,
-a black diamond shield with an antique-gold rim, and a single ember-orange crest. The final transparent
-source was resized with Lanczos filtering into `favicon-16x16.png`, `favicon-32x32.png`,
+The favicon and in-game brand emblem were generated on 2026-08-29 with the built-in OpenAI image generation
+tool and reviewed at their actual display sizes. The accepted detailed mark uses a front-facing pale knight
+helmet, layered black diamond shield, bright antique-gold armor and rim, and an ember-orange plume. The same
+transparent source is used on the landing screen, loading screen, HUD, social preview, and favicon exports.
+It was resized with Lanczos filtering into `favicon-16x16.png`, `favicon-32x32.png`,
 `apple-touch-icon.png`, and `favicon.png`; `favicon.ico` is the 32 px compatibility export.
 
-Final prompt summary: "A minimal, symmetrical front-facing knight helmet inside a rotated black diamond,
-with a thick antique-gold rim and a simple three-lobed ember-orange crest; flat vector-like raster shapes,
-high contrast, no text, and genuine transparency outside the diamond; readable at 16x16 and 32x32."
+Final prompt summary: "A polished dark-fantasy knight emblem: a symmetrical front-facing silver helmet in
+a layered black diamond shield, surrounded by bright antique-gold armor, rim and heraldic ornaments, with
+an ember-orange plume; centered, high contrast, no text, and genuine transparency outside the diamond."

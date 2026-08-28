@@ -8,9 +8,13 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="preload" as="image" href="/favicon.png" />
     <meta name="description" content="SMITE KNIGHT — сюжетные осады и масштабная война двух цитаделей прямо в браузере." />
     <meta property="og:title" content="SMITE KNIGHT — Ashen Siege" />
     <meta property="og:description" content="Прорви ворота, переживи град стрел и возьми Чёрную крепость." />
+    <meta property="og:image" content="https://smite.xedoc.ru/favicon.png" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:image" content="https://smite.xedoc.ru/favicon.png" />
     <title>SMITE KNIGHT — Ashen Siege</title>
   </head>
   <body>
@@ -23,7 +27,10 @@
         <div class="landing-vignette"></div>
         <div class="landing-content">
           <div class="eyebrow"><span></span> БРАУЗЕРНАЯ ОСАДА <span></span></div>
-          <h1 id="game-title"><small>SMITE</small><strong>KNIGHT</strong></h1>
+          <div class="title-lockup">
+            <h1 id="game-title"><small>SMITE</small><strong>KNIGHT</strong></h1>
+            <img class="brand-emblem" src="/favicon.png" alt="" aria-hidden="true" />
+          </div>
           <p class="subtitle">ASHEN SIEGE</p>
           <p class="pitch">Проведи таран сквозь огонь. Сломай Чёрные врата.<br />Подними знамя там, где падали короли.</p>
           <div class="landing-actions">
@@ -86,7 +93,7 @@
           </div>
         </div>
         <div class="bars">
-          <div class="crest">SK</div>
+          <img class="crest" src="/favicon.png" alt="" aria-hidden="true" />
           <div class="bar-stack"><div class="health-bar"><i id="health-fill"></i><span id="health-text">180</span></div><div class="stamina-bar"><i id="stamina-fill"></i></div></div>
         </div>
         <div id="weapon-card"><span class="weapon-icon">⚔</span><div><b id="weapon-name">Меч пепла</b><small id="weapon-hint">Удерживайте ЛКМ — серия атак · ПКМ — блок</small></div></div>
@@ -119,7 +126,7 @@
         <div id="joystick"><i></i></div><button id="mobile-block">ЩИТ</button><button id="mobile-attack">УДАР</button><button id="mobile-dodge">↝</button>
       </div>
 
-      <div id="loading"><div class="loader-emblem">SK</div><div class="loader-line"><i></i></div><span>ОСНАЩАЕМ ЛЕГИОН</span></div>
+      <div id="loading"><img class="loader-emblem" src="/favicon.png" alt="" aria-hidden="true" /><div class="loader-line"><i></i></div><span>ОСНАЩАЕМ ЛЕГИОН</span></div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

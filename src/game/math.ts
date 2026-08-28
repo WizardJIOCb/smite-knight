@@ -30,6 +30,10 @@ export function angleDelta(from: number, to: number): number {
   return Math.atan2(Math.sin(to - from), Math.cos(to - from));
 }
 
+export function dampAngle(current: number, target: number, smoothing: number, delta: number): number {
+  return current + angleDelta(current, target) * (1 - Math.exp(-smoothing * delta));
+}
+
 export function seededRandom(seed: number): () => number {
   let state = seed >>> 0;
   return () => {

@@ -30,7 +30,11 @@ let multiplayer = false;
 let damageTimer = 0;
 
 const network = new NetworkClient({
-  onSnapshot: (players, localId) => game.syncRemotePlayers(players, localId),
+  onSnapshot: (snapshot, localId) => {
+    game.syncRemotePlayers(snapshot.players, localId);
+    game.applyNetworkBattleEvent('gate-hit', snapshot.gateHealth);
+    game.applyNetworkBattleEvent('phase', snapshot.phase);
+  },
   onPlayerUpdate: (player) => game.updateRemotePlayer(player),
   onPlayerLeft: (id) => game.removeRemotePlayer(id),
   onBattleEvent: (type, value) => game.applyNetworkBattleEvent(type, value),
@@ -56,6 +60,7 @@ const game = new SiegeGame(canvas, {
   onNetworkState: (state) => network.sendPlayer(state),
   onBattleEvent: (type, value) => network.sendBattleEvent(type, value),
 });
+if (import.meta.env.DEV) Object.assign(window, { __smiteGame: game });
 
 const minimumLoadingTime = new Promise<void>((resolve) => window.setTimeout(resolve, 700));
 void Promise.all([preloadKnightAssets(), minimumLoadingTime]).finally(() => loading.classList.add('ready'));
@@ -211,7 +216,7 @@ function updateHud(state: HudState): void {
   element('#health-fill').style.width = `${state.health / state.maxHealth * 100}%`;
   element('#health-text').textContent = String(Math.ceil(state.health));
   element('#stamina-fill').style.width = `${state.stamina}%`;
-  element('#phase-label').textContent = `ФАЗА ${['I · ПОДЪЁМ', 'II · ПРОЛОМ', 'III · ДВОР'][state.phase] ?? 'III · ДВОР'}`;
+  element('#phase-label').textContent = `ФАЗА ${['I · ПОДЪЁМ', 'II · ПРОЛОМ', 'III · ВОСХОЖДЕНИЕ', 'IV · ВЕРШИНА'][state.phase] ?? 'IV · ВЕРШИНА'}`;
   element('#objective').textContent = state.objective;
   element('#objective-fill').style.width = `${state.progress}%`;
   element('#ally-count').textContent = String(state.allies);

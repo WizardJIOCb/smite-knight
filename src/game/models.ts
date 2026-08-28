@@ -6,7 +6,7 @@ import { clamp, damp } from './math';
 export type RigAction = 'idle' | 'run' | 'attack' | 'block' | 'dead';
 
 type KnightTeam = 'allies' | 'enemies';
-type KnightRole = 'soldier' | 'archer' | 'boss';
+type KnightRole = 'soldier' | 'archer' | 'brute' | 'boss';
 type FactionPalette = KnightTeam | 'boss';
 
 interface DetailedKnightAsset {
@@ -31,6 +31,13 @@ const clipNames: Record<KnightRole, Record<RigAction, string>> = {
     run: 'Running_A',
     attack: '2H_Ranged_Shoot',
     block: '2H_Ranged_Aiming',
+    dead: 'Death_A',
+  },
+  brute: {
+    idle: '2H_Melee_Idle',
+    run: 'Running_B',
+    attack: '2H_Melee_Attack_Spin',
+    block: 'Blocking',
     dead: 'Death_A',
   },
   boss: {
@@ -177,23 +184,26 @@ export class KnightRig {
   private deathClock = 0;
   private speed = 0;
   private damageFlash = 0;
+  private groundHeight = 0;
   private readonly armorMeshes: THREE.Mesh[] = [];
   private detailedModel?: THREE.Group;
   private mixer?: THREE.AnimationMixer;
   private activeAnimation?: THREE.AnimationAction;
   private activeClipName = '';
   private readonly detailedMaterials: THREE.MeshStandardMaterial[] = [];
+  private bossAura?: THREE.Mesh<THREE.TorusGeometry, THREE.MeshStandardMaterial>;
 
   constructor(team: KnightTeam, role: KnightRole = 'soldier') {
     this.team = team;
     this.role = role;
     const boss = role === 'boss';
+    const brute = role === 'brute';
     const cloth = team === 'allies' ? materials.allyCloth : materials.enemyCloth;
     const capeMaterial = team === 'allies' ? materials.allyCape : materials.enemyCape;
     const armor = (boss ? materials.bossArmor : team === 'allies' ? materials.armor : materials.darkArmor).clone();
     armor.userData.baseEmissiveIntensity = boss ? 0.4 : 0;
     armor.emissiveIntensity = armor.userData.baseEmissiveIntensity as number;
-    const scale = boss ? 1.23 : 1;
+    const scale = boss ? 1.28 : brute ? 1.12 : 1;
 
     this.root.scale.setScalar(scale);
     this.root.add(this.body);
@@ -255,10 +265,11 @@ export class KnightRig {
 
     this.weaponPivot.position.set(0, -0.48, 0);
     this.rightArm.add(this.weaponPivot);
-    if (role === 'archer') this.buildBow(); else this.buildSword(boss);
+    if (role === 'archer') this.buildBow(); else this.buildSword(boss || brute);
     this.shieldPivot.position.set(0, -0.43, 0);
     this.leftArm.add(this.shieldPivot);
     if (role !== 'archer') this.buildShield(team, boss);
+    if (boss) this.buildBossRegalia();
 
     this.root.traverse((object) => { object.frustumCulled = true; });
     void loadDetailedKnightAsset().then((asset) => this.mountDetailedModel(asset)).catch(warnDetailedAssetFailure);
@@ -276,6 +287,11 @@ export class KnightRig {
 
   flashDamage(): void {
     this.damageFlash = 0.12;
+  }
+
+  setGroundHeight(height: number): void {
+    this.groundHeight = height;
+    if (this.action !== 'dead') this.root.position.y = height;
   }
 
   update(time: number, delta: number): void {
@@ -316,12 +332,12 @@ export class KnightRig {
       const fall = clamp(this.deathClock * 1.9, 0, 1);
       if (!this.detailedModel) {
         this.root.rotation.z = damp(this.root.rotation.z, Math.PI * 0.5, 6, delta);
-        this.root.position.y = damp(this.root.position.y, 0.18, 6, delta);
+        this.root.position.y = damp(this.root.position.y, this.groundHeight + 0.18, 6, delta);
       }
       bodyY = -0.12 * fall;
     } else {
       this.root.rotation.z = damp(this.root.rotation.z, 0, 7, delta);
-      this.root.position.y = damp(this.root.position.y, 0, 7, delta);
+      this.root.position.y = damp(this.root.position.y, this.groundHeight, 14, delta);
     }
 
     this.rightArm.rotation.x = damp(this.rightArm.rotation.x, rightArmX, 16, delta);
@@ -343,6 +359,36 @@ export class KnightRig {
     for (const material of this.detailedMaterials) {
       material.emissiveIntensity = (this.role === 'boss' ? 0.14 : 0) + (this.damageFlash > 0 ? 0.82 : 0);
     }
+    if (this.bossAura) {
+      this.bossAura.rotation.z = time * 0.48;
+      this.bossAura.material.emissiveIntensity = 1.2 + Math.sin(time * 3.4) * 0.45;
+    }
+  }
+
+  private buildBossRegalia(): void {
+    const regalia = new THREE.Group();
+    regalia.name = 'Warlord_Regalia';
+    const blackIron = new THREE.MeshStandardMaterial({ color: 0x17191c, metalness: 0.9, roughness: 0.24 });
+    const ember = new THREE.MeshStandardMaterial({ color: 0xff6a20, emissive: 0xb51d05, emissiveIntensity: 2.1, metalness: 0.45, roughness: 0.28 });
+    for (const side of [-1, 1]) {
+      const horn = mesh(new THREE.ConeGeometry(0.13, 0.66, 7), blackIron);
+      horn.position.set(side * 0.35, 2.22, -0.02);
+      horn.rotation.z = side * -0.38;
+      regalia.add(horn);
+      const shoulderSpike = mesh(new THREE.ConeGeometry(0.14, 0.58, 6), blackIron);
+      shoulderSpike.position.set(side * 0.62, 1.48, -0.02);
+      shoulderSpike.rotation.z = side * -1.02;
+      regalia.add(shoulderSpike);
+    }
+    const crown = mesh(new THREE.TorusGeometry(0.3, 0.055, 7, 12), ember);
+    crown.rotation.x = Math.PI / 2;
+    crown.position.y = 2.13;
+    regalia.add(crown);
+    this.bossAura = new THREE.Mesh(new THREE.TorusGeometry(0.78, 0.035, 6, 24), ember.clone());
+    this.bossAura.rotation.x = Math.PI / 2;
+    this.bossAura.position.y = 0.06;
+    regalia.add(this.bossAura);
+    this.root.add(regalia);
   }
 
   private mountDetailedModel(asset: DetailedKnightAsset): void {
@@ -401,7 +447,7 @@ export class KnightRig {
         object.receiveShadow = true;
       });
       model.getObjectByName('handslot.r')?.add(crossbow);
-    } else if (this.role === 'boss') {
+    } else if (this.role === 'boss' || this.role === 'brute') {
       const sword = model.getObjectByName('2H_Sword');
       if (sword) sword.visible = true;
     } else {

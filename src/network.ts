@@ -1,8 +1,8 @@
 import { io, type Socket } from 'socket.io-client';
-import type { ClientToServerEvents, NetworkPlayer, RoomReply, ServerToClientEvents } from '../shared/protocol';
+import type { ClientToServerEvents, NetworkPlayer, RoomReply, RoomSnapshot, ServerToClientEvents } from '../shared/protocol';
 
 export interface NetworkCallbacks {
-  onSnapshot: (players: NetworkPlayer[], localId: string) => void;
+  onSnapshot: (snapshot: RoomSnapshot, localId: string) => void;
   onPlayerUpdate: (player: NetworkPlayer) => void;
   onPlayerLeft: (id: string) => void;
   onBattleEvent: (type: 'gate-hit' | 'phase', value: number) => void;
@@ -20,7 +20,7 @@ export class NetworkClient {
   constructor(callbacks: NetworkCallbacks) {
     this.callbacks = callbacks;
     this.socket = io({ autoConnect: false, transports: ['websocket', 'polling'] });
-    this.socket.on('room:snapshot', (snapshot) => this.applySnapshot(snapshot.players));
+    this.socket.on('room:snapshot', (snapshot) => this.applySnapshot(snapshot));
     this.socket.on('player:joined', (player) => {
       this.playerIds.add(player.id);
       this.callbacks.onPlayerUpdate(player);
@@ -88,12 +88,12 @@ export class NetworkClient {
     if (!result.ok) return;
     this.roomCode = result.room.code;
     this.localId = result.playerId;
-    this.applySnapshot(result.room.players);
+    this.applySnapshot(result.room);
   }
 
-  private applySnapshot(players: NetworkPlayer[]): void {
-    this.playerIds = new Set(players.map((player) => player.id));
-    if (this.localId) this.callbacks.onSnapshot(players, this.localId);
+  private applySnapshot(snapshot: RoomSnapshot): void {
+    this.playerIds = new Set(snapshot.players.map((player) => player.id));
+    if (this.localId) this.callbacks.onSnapshot(snapshot, this.localId);
     this.callbacks.onCount(this.playerIds.size);
   }
 }

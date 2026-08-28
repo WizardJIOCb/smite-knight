@@ -10,12 +10,14 @@ import {
   angleDelta,
   clamp,
   damp,
+  dampAngle,
   distanceXZ,
   pointInAttackArc,
   seededRandom,
   setRightPerpendicular,
   smoothstep,
 } from './math';
+import { CASTLE_LIMITS, castleGroundHeight } from './world';
 
 export interface HudState {
   health: number;
@@ -46,7 +48,7 @@ export interface GameEvents {
 }
 
 type Team = 'allies' | 'enemies';
-type Role = 'soldier' | 'archer' | 'boss' | 'player';
+type Role = 'soldier' | 'archer' | 'brute' | 'boss' | 'player';
 
 interface Actor {
   id: string;
@@ -86,6 +88,16 @@ interface Particle {
   maxLife: number;
 }
 
+interface ExplosiveProp {
+  group: THREE.Group;
+  kind: 'barrel' | 'mine';
+  armed: boolean;
+  triggerRadius: number;
+  blastRadius: number;
+  damage: number;
+  team: Team | 'neutral';
+}
+
 interface RemoteRig {
   rig: KnightRig;
   targetPosition: THREE.Vector3;
@@ -111,13 +123,14 @@ export class SiegeGame {
   private readonly actors: Actor[] = [];
   private readonly projectiles: Projectile[] = [];
   private readonly particles: Particle[] = [];
+  private readonly explosives: ExplosiveProp[] = [];
   private readonly remotes = new Map<string, RemoteRig>();
   private readonly temp = new THREE.Vector3();
   private readonly temp2 = new THREE.Vector3();
   private player!: Actor;
   private boss!: Actor;
-  private gateLeft!: THREE.Mesh;
-  private gateRight!: THREE.Mesh;
+  private gateLeft!: THREE.Group;
+  private gateRight!: THREE.Group;
   private gateGroup!: THREE.Group;
   private ram!: THREE.Group;
   private ramHead!: THREE.Mesh;
@@ -167,7 +180,6 @@ export class SiegeGame {
 
   start(): void {
     this.mode = 'running';
-    this.phase = 0;
     this.elapsed = 0;
     this.lastPointerLock = false;
     this.audio.horn();
@@ -206,7 +218,11 @@ export class SiegeGame {
     this.gateRight.rotation.y = 0;
     this.gateLeft.visible = true;
     this.gateRight.visible = true;
-    this.banner.rotation.z = 0;
+    this.banner.rotation.z = Math.PI / 2;
+    for (const explosive of this.explosives) {
+      explosive.armed = true;
+      explosive.group.visible = true;
+    }
     this.spawnBattle();
     this.start();
   }
@@ -261,7 +277,11 @@ export class SiegeGame {
 
   applyNetworkBattleEvent(type: 'gate-hit' | 'phase', value: number): void {
     if (type === 'gate-hit') this.gateHealth = Math.min(this.gateHealth, value);
-    else this.phase = Math.max(this.phase, Math.floor(value));
+    else {
+      this.phase = Math.max(this.phase, Math.floor(value));
+      if (this.phase >= 2) this.gateHealth = 0;
+      if (this.phase >= 3) this.boss.rig.root.visible = true;
+    }
   }
 
   private buildWorld(): void {
@@ -284,14 +304,14 @@ export class SiegeGame {
 
     const groundTexture = this.createGroundTexture();
     groundTexture.wrapS = groundTexture.wrapT = THREE.RepeatWrapping;
-    groundTexture.repeat.set(18, 18);
+    groundTexture.repeat.set(22, 30);
     groundTexture.colorSpace = THREE.SRGBColorSpace;
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(120, 120, 48, 48),
-      new THREE.MeshStandardMaterial({ map: groundTexture, color: 0x655e4b, roughness: 1, metalness: 0 }),
+      new THREE.PlaneGeometry(150, 190, 64, 80),
+      new THREE.MeshStandardMaterial({ map: groundTexture, bumpMap: groundTexture, bumpScale: 0.09, color: 0x655e4b, roughness: 1, metalness: 0 }),
     );
     ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.03;
+    ground.position.set(0, -0.03, -20);
     ground.receiveShadow = true;
     this.scene.add(ground);
 
@@ -305,11 +325,16 @@ export class SiegeGame {
   private buildCastle(): void {
     const stoneTexture = this.createStoneTexture();
     stoneTexture.wrapS = stoneTexture.wrapT = THREE.RepeatWrapping;
-    stoneTexture.repeat.set(3, 2);
+    stoneTexture.repeat.set(3.5, 2.5);
     stoneTexture.colorSpace = THREE.SRGBColorSpace;
-    const stone = new THREE.MeshStandardMaterial({ map: stoneTexture, color: 0x77746e, roughness: 0.93, metalness: 0.03 });
-    const darkStone = new THREE.MeshStandardMaterial({ map: stoneTexture, color: 0x4b4c4c, roughness: 0.95 });
-    const wood = new THREE.MeshStandardMaterial({ color: 0x3d2415, roughness: 0.9, metalness: 0.04 });
+    const woodTexture = this.createWoodTexture();
+    woodTexture.wrapS = woodTexture.wrapT = THREE.RepeatWrapping;
+    woodTexture.repeat.set(2, 3);
+    woodTexture.colorSpace = THREE.SRGBColorSpace;
+    const stone = new THREE.MeshStandardMaterial({ map: stoneTexture, bumpMap: stoneTexture, bumpScale: 0.12, color: 0x86837b, roughness: 0.88, metalness: 0.03 });
+    const darkStone = new THREE.MeshStandardMaterial({ map: stoneTexture, bumpMap: stoneTexture, bumpScale: 0.15, color: 0x505457, roughness: 0.93 });
+    const paleStone = new THREE.MeshStandardMaterial({ map: stoneTexture, bumpMap: stoneTexture, bumpScale: 0.1, color: 0xa19a8e, roughness: 0.86 });
+    const wood = new THREE.MeshStandardMaterial({ map: woodTexture, bumpMap: woodTexture, bumpScale: 0.09, color: 0x5a2f18, roughness: 0.84, metalness: 0.04 });
     const iron = new THREE.MeshStandardMaterial({ color: 0x242629, metalness: 0.82, roughness: 0.3 });
 
     const makeBox = (size: THREE.Vector3, position: THREE.Vector3, material: THREE.Material, cast = true): THREE.Mesh => {
@@ -321,18 +346,23 @@ export class SiegeGame {
       return item;
     };
 
-    makeBox(new THREE.Vector3(21, 8, 3.2), new THREE.Vector3(-15.5, 4, -27), stone);
-    makeBox(new THREE.Vector3(21, 8, 3.2), new THREE.Vector3(15.5, 4, -27), stone);
-    makeBox(new THREE.Vector3(3.2, 8, 24), new THREE.Vector3(-27, 4, -37), stone);
-    makeBox(new THREE.Vector3(3.2, 8, 24), new THREE.Vector3(27, 4, -37), stone);
-    makeBox(new THREE.Vector3(54, 8, 3.2), new THREE.Vector3(0, 4, -49), darkStone);
+    makeBox(new THREE.Vector3(21, 9, 3.2), new THREE.Vector3(-15.5, 4.5, -27), stone);
+    makeBox(new THREE.Vector3(21, 9, 3.2), new THREE.Vector3(15.5, 4.5, -27), stone);
+    makeBox(new THREE.Vector3(3.2, 10, 55), new THREE.Vector3(-27, 5, -54.5), stone);
+    makeBox(new THREE.Vector3(3.2, 10, 55), new THREE.Vector3(27, 5, -54.5), stone);
+    makeBox(new THREE.Vector3(54, 13, 3.2), new THREE.Vector3(0, 6.5, CASTLE_LIMITS.backWallZ), darkStone);
+
+    makeBox(new THREE.Vector3(31, 3, 13), new THREE.Vector3(0, 1.5, -52.5), darkStone);
+    makeBox(new THREE.Vector3(25, 6, 18), new THREE.Vector3(0, 3, -73), darkStone);
+    this.createStaircase(12, 12, CASTLE_LIMITS.firstStairStartZ, CASTLE_LIMITS.firstStairEndZ, 0, CASTLE_LIMITS.firstTerraceHeight, paleStone);
+    this.createStaircase(10, 12, CASTLE_LIMITS.secondStairStartZ, CASTLE_LIMITS.secondStairEndZ, CASTLE_LIMITS.firstTerraceHeight, CASTLE_LIMITS.summitHeight, paleStone);
 
     for (const x of [-24, -21, -18, -15, -12, -9, 9, 12, 15, 18, 21, 24]) {
-      makeBox(new THREE.Vector3(1.7, 1.4, 2.3), new THREE.Vector3(x, 8.7, -27), stone);
+      makeBox(new THREE.Vector3(1.7, 1.4, 2.3), new THREE.Vector3(x, 9.7, -27), stone);
     }
-    for (const z of [-31, -35, -39, -43, -47]) {
-      makeBox(new THREE.Vector3(2.3, 1.4, 1.7), new THREE.Vector3(-27, 8.7, z), stone);
-      makeBox(new THREE.Vector3(2.3, 1.4, 1.7), new THREE.Vector3(27, 8.7, z), stone);
+    for (const z of [-31, -36, -41, -46, -51, -56, -61, -66, -71, -76, -80]) {
+      makeBox(new THREE.Vector3(2.3, 1.4, 1.7), new THREE.Vector3(-27, 10.7, z), stone);
+      makeBox(new THREE.Vector3(2.3, 1.4, 1.7), new THREE.Vector3(27, 10.7, z), stone);
     }
 
     for (const x of [-25, 25]) {
@@ -352,46 +382,107 @@ export class SiegeGame {
       this.scene.add(roof);
     }
 
-    const gateArch = new THREE.Mesh(new THREE.TorusGeometry(5.1, 1.7, 6, 16, Math.PI), stone);
-    gateArch.position.set(0, 6.1, -25.7);
-    gateArch.rotation.z = Math.PI;
+    const gateArch = new THREE.Mesh(new THREE.TorusGeometry(4, 1.25, 8, 24, Math.PI), paleStone);
+    gateArch.position.set(0, 4.05, -25.7);
     gateArch.castShadow = true;
     this.scene.add(gateArch);
+    const keystone = makeBox(new THREE.Vector3(1.3, 1.8, 1.25), new THREE.Vector3(0, 9.05, -25.65), paleStone);
+    keystone.rotation.z = Math.PI / 4;
+
     this.gateGroup = new THREE.Group();
     this.gateGroup.position.set(0, 0, -25.5);
     this.scene.add(this.gateGroup);
-    this.gateLeft = new THREE.Mesh(new THREE.BoxGeometry(3.9, 7, 0.45), wood);
-    this.gateRight = this.gateLeft.clone();
-    this.gateLeft.geometry = this.gateLeft.geometry.clone();
-    this.gateLeft.position.set(-2, 3.5, 0);
-    this.gateRight.position.set(2, 3.5, 0);
-    this.gateLeft.castShadow = this.gateRight.castShadow = true;
+    this.gateLeft = new THREE.Group();
+    this.gateRight = new THREE.Group();
+    this.gateLeft.position.set(-3.9, 3.5, 0);
+    this.gateRight.position.set(3.9, 3.5, 0);
     this.gateGroup.add(this.gateLeft, this.gateRight);
-    for (const door of [this.gateLeft, this.gateRight]) {
+    for (const [door, direction] of [[this.gateLeft, 1], [this.gateRight, -1]] as [THREE.Group, number][]) {
+      const leaf = new THREE.Group();
+      leaf.position.x = direction * 1.95;
+      door.add(leaf);
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(3.9, 7, 0.45), wood);
+      slab.castShadow = slab.receiveShadow = true;
+      leaf.add(slab);
       for (const y of [-2.5, -0.8, 0.9, 2.6]) {
         const brace = new THREE.Mesh(new THREE.BoxGeometry(4.05, 0.16, 0.56), iron);
         brace.position.y = y;
-        door.add(brace);
+        leaf.add(brace);
+      }
+      for (const x of [-1.45, -0.72, 0, 0.72, 1.45]) {
+        const stud = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.1, 8), iron);
+        stud.rotation.x = Math.PI / 2;
+        stud.position.set(x, 0, 0.28);
+        leaf.add(stud);
       }
     }
 
-    const keep = makeBox(new THREE.Vector3(19, 15, 7), new THREE.Vector3(0, 7.5, -44), darkStone);
+    for (const [x, z, base] of [[-14, -67, 6], [14, -67, 6]] as [number, number, number][]) {
+      const tower = new THREE.Mesh(new THREE.CylinderGeometry(3.6, 4.1, 12, 12), darkStone);
+      tower.position.set(x, base + 6, z);
+      tower.castShadow = tower.receiveShadow = true;
+      this.scene.add(tower);
+      for (let index = 0; index < 12; index += 2) {
+        const angle = index / 12 * Math.PI * 2;
+        const merlon = makeBox(new THREE.Vector3(1.2, 1.5, 1.2), new THREE.Vector3(x + Math.sin(angle) * 3.4, base + 12.4, z + Math.cos(angle) * 3.4), darkStone);
+        merlon.rotation.y = angle;
+      }
+    }
+
+    const keep = makeBox(new THREE.Vector3(20, 20, 7), new THREE.Vector3(0, 16, -78), darkStone);
     for (const x of [-8, -4, 0, 4, 8]) {
-      const merlon = makeBox(new THREE.Vector3(2, 1.7, 1.6), new THREE.Vector3(x, 15.8, -42), darkStone);
+      const merlon = makeBox(new THREE.Vector3(2, 1.7, 1.6), new THREE.Vector3(x, 26.8, -75.5), darkStone);
       merlon.castShadow = true;
     }
-    const keepDoor = makeBox(new THREE.Vector3(4, 5.8, 0.35), new THREE.Vector3(0, 2.9, -40.35), wood);
+    const keepDoor = makeBox(new THREE.Vector3(4, 6, 0.35), new THREE.Vector3(0, 9, -74.35), wood);
     keepDoor.castShadow = true;
 
     this.banner = this.createBanner(0xa52922, 0xd6ae60, true);
-    this.banner.position.set(0, 0, -38.3);
+    this.banner.position.set(0, CASTLE_LIMITS.summitHeight, -72.8);
     this.banner.rotation.z = Math.PI / 2;
     this.scene.add(this.banner);
 
-    for (const position of [new THREE.Vector3(-5.2, 1.5, -25), new THREE.Vector3(5.2, 1.5, -25), new THREE.Vector3(-8, 2, -40), new THREE.Vector3(8, 2, -40)]) {
+    for (const position of [
+      new THREE.Vector3(-5.2, 1.5, -25),
+      new THREE.Vector3(5.2, 1.5, -25),
+      new THREE.Vector3(-8, 4.5, -50),
+      new THREE.Vector3(8, 4.5, -50),
+      new THREE.Vector3(-7, 7.5, -69),
+      new THREE.Vector3(7, 7.5, -69),
+    ]) {
       this.createTorch(position);
     }
     void keep;
+  }
+
+  private createStaircase(
+    width: number,
+    steps: number,
+    startZ: number,
+    endZ: number,
+    baseHeight: number,
+    topHeight: number,
+    material: THREE.Material,
+  ): void {
+    const depth = Math.abs(endZ - startZ) / steps;
+    for (let index = 0; index < steps; index += 1) {
+      const progress = (index + 1) / steps;
+      const height = baseHeight + (topHeight - baseHeight) * progress;
+      const step = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth + 0.04), material);
+      step.position.set(0, height * 0.5, startZ - depth * (index + 0.5));
+      step.castShadow = step.receiveShadow = true;
+      this.scene.add(step);
+    }
+    const railMaterial = new THREE.MeshStandardMaterial({ color: 0x3c4143, metalness: 0.65, roughness: 0.4 });
+    for (const side of [-1, 1]) {
+      for (let index = 0; index <= steps; index += 2) {
+        const progress = index / steps;
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.05, 0.16), railMaterial);
+        post.position.set(side * (width * 0.5 - 0.2), baseHeight + (topHeight - baseHeight) * progress + 0.52, startZ - Math.abs(endZ - startZ) * progress);
+        post.castShadow = true;
+        this.scene.add(post);
+      }
+    }
   }
 
   private buildBattlefield(): void {
@@ -462,43 +553,195 @@ export class SiegeGame {
       this.scene.add(tent);
       this.createTorch(new THREE.Vector3(x + 3.3, 0.2, z));
     }
+
+    for (const [x, z, scale] of [
+      [-34, 30, 1.25], [-29, 12, 0.95], [33, 26, 1.2], [37, 4, 0.9],
+      [-36, -12, 1.1], [36, -18, 1.25], [-22, -63, 0.85], [22, -70, 0.9],
+    ] as [number, number, number][]) this.createBattleTree(x, z, scale);
+
+    for (const [x, z, layers] of [
+      [-11, 7, 2], [12, -7, 3], [-18, -17, 2], [9, -35, 3], [-10, -51, 2], [7, -68, 2],
+    ] as [number, number, number][]) this.createCrateStack(x, z, layers);
+
+    for (const [x, z, rotation] of [
+      [-8, 1, 0.18], [9, -14, -0.2], [-12, -33, 0.08], [10, -55, -0.12],
+    ] as [number, number, number][]) this.createBarricade(x, z, rotation);
+
+    for (const [x, z] of [
+      [-6, -9], [7, -15], [-13, -34], [11, -49], [-8, -67], [8, -70],
+    ] as [number, number][]) this.createExplosiveBarrel(x, z);
+
+    for (const [x, z] of [[-10, 5], [11, -4], [-7, -36], [6, -54], [-5, -65]] as [number, number][]) {
+      this.createMine(x, z, 'enemies');
+    }
+  }
+
+  private createBattleTree(x: number, z: number, scale: number): void {
+    const ground = castleGroundHeight(x, z);
+    const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x35261b, roughness: 1 });
+    const crownMaterial = new THREE.MeshStandardMaterial({ color: 0x263f34, roughness: 0.96, flatShading: true });
+    const tree = new THREE.Group();
+    tree.position.set(x, ground, z);
+    tree.scale.setScalar(scale);
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.48, 4.8, 7), trunkMaterial);
+    trunk.position.y = 2.4;
+    trunk.castShadow = trunk.receiveShadow = true;
+    tree.add(trunk);
+    for (const [ox, oy, oz, size] of [[0, 5.2, 0, 2.4], [-1, 4.7, 0.3, 1.7], [1, 4.9, -0.2, 1.8], [0.2, 6.3, 0.1, 1.55]] as [number, number, number, number][]) {
+      const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(size, 1), crownMaterial);
+      crown.position.set(ox, oy, oz);
+      crown.scale.y = 0.78;
+      crown.castShadow = crown.receiveShadow = true;
+      tree.add(crown);
+    }
+    tree.rotation.y = this.random() * Math.PI;
+    this.scene.add(tree);
+  }
+
+  private createCrateStack(x: number, z: number, layers: number): void {
+    const material = new THREE.MeshStandardMaterial({ map: this.createWoodTexture(), color: 0x704526, roughness: 0.9 });
+    const ground = castleGroundHeight(x, z);
+    for (let layer = 0; layer < layers; layer += 1) {
+      const count = Math.max(1, layers - layer);
+      for (let index = 0; index < count; index += 1) {
+        const crate = new THREE.Mesh(new THREE.BoxGeometry(1.05, 1.05, 1.05), material);
+        crate.position.set(x + (index - (count - 1) / 2) * 1.08, ground + 0.54 + layer * 1.06, z);
+        crate.rotation.y = (this.random() - 0.5) * 0.18;
+        crate.castShadow = crate.receiveShadow = true;
+        this.scene.add(crate);
+      }
+    }
+  }
+
+  private createBarricade(x: number, z: number, rotation: number): void {
+    const group = new THREE.Group();
+    group.position.set(x, castleGroundHeight(x, z), z);
+    group.rotation.y = rotation;
+    const wood = new THREE.MeshStandardMaterial({ color: 0x4b2c18, roughness: 0.95 });
+    for (const offset of [-1.4, 0, 1.4]) {
+      const stake = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.18, 2.8, 6), wood);
+      stake.position.set(offset, 0.95, 0);
+      stake.rotation.z = Math.PI * 0.42;
+      stake.castShadow = true;
+      group.add(stake);
+    }
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(4.3, 0.28, 0.3), wood);
+    beam.position.y = 0.85;
+    beam.castShadow = true;
+    group.add(beam);
+    this.scene.add(group);
+  }
+
+  private createExplosiveBarrel(x: number, z: number): void {
+    const group = new THREE.Group();
+    group.position.set(x, castleGroundHeight(x, z), z);
+    const wood = new THREE.MeshStandardMaterial({ color: 0x6b351d, roughness: 0.82 });
+    const iron = new THREE.MeshStandardMaterial({ color: 0x292c30, metalness: 0.78, roughness: 0.32 });
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.46, 1.35, 12), wood);
+    body.position.y = 0.68;
+    body.castShadow = body.receiveShadow = true;
+    group.add(body);
+    for (const y of [0.18, 0.68, 1.18]) {
+      const band = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.045, 6, 12), iron);
+      band.rotation.x = Math.PI / 2;
+      band.position.y = y;
+      group.add(band);
+    }
+    const warning = new THREE.Mesh(new THREE.OctahedronGeometry(0.12, 0), new THREE.MeshStandardMaterial({ color: 0xff8a2a, emissive: 0xff3100, emissiveIntensity: 2.5 }));
+    warning.position.set(0, 1.43, 0);
+    group.add(warning);
+    this.scene.add(group);
+    this.explosives.push({ group, kind: 'barrel', armed: true, triggerRadius: 0.75, blastRadius: 5.5, damage: 82, team: 'neutral' });
+  }
+
+  private createMine(x: number, z: number, team: Team): void {
+    const group = new THREE.Group();
+    group.position.set(x, castleGroundHeight(x, z) + 0.08, z);
+    const metal = new THREE.MeshStandardMaterial({ color: 0x2c3031, metalness: 0.75, roughness: 0.38 });
+    const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.62, 0.18, 10), metal);
+    plate.castShadow = true;
+    group.add(plate);
+    for (let index = 0; index < 8; index += 1) {
+      const angle = index / 8 * Math.PI * 2;
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.34, 5), metal);
+      spike.position.set(Math.sin(angle) * 0.42, 0.18, Math.cos(angle) * 0.42);
+      spike.rotation.z = Math.sin(angle) * 0.7;
+      spike.rotation.x = Math.cos(angle) * -0.7;
+      group.add(spike);
+    }
+    const fuse = new THREE.Mesh(new THREE.SphereGeometry(0.08, 6, 4), new THREE.MeshBasicMaterial({ color: 0xff4a18 }));
+    fuse.position.y = 0.2;
+    fuse.name = 'mine-fuse';
+    group.add(fuse);
+    this.scene.add(group);
+    this.explosives.push({ group, kind: 'mine', armed: true, triggerRadius: 1.35, blastRadius: 4.6, damage: 68, team });
   }
 
   private buildSkyline(): void {
     const mountainMaterial = new THREE.MeshStandardMaterial({ color: 0x20272b, roughness: 1, flatShading: true });
     for (let index = 0; index < 16; index += 1) {
       const angle = index / 16 * Math.PI * 2;
-      const radius = 70 + this.random() * 18;
-      const height = 14 + this.random() * 27;
+      const radius = 118 + this.random() * 30;
+      const height = 20 + this.random() * 34;
       const mountain = new THREE.Mesh(new THREE.ConeGeometry(10 + this.random() * 12, height, 5), mountainMaterial);
       mountain.position.set(Math.sin(angle) * radius, height * 0.5 - 1, Math.cos(angle) * radius);
       mountain.rotation.y = this.random() * Math.PI;
       this.scene.add(mountain);
     }
     const moon = new THREE.Mesh(new THREE.SphereGeometry(4.5, 20, 12), new THREE.MeshBasicMaterial({ color: 0xf5c990 }));
-    moon.position.set(42, 34, -72);
+    moon.position.set(58, 45, -126);
     this.scene.add(moon);
   }
 
   private spawnBattle(): void {
     this.player = this.createActor('player', 'allies', 180, 4.9, 3.1, 36);
     this.player.rig.root.position.copy(PLAYER_START);
+    this.player.rig.setGroundHeight(0);
 
-    for (let index = 0; index < 18; index += 1) {
-      const role: Role = index % 7 === 0 ? 'archer' : 'soldier';
-      const actor = this.createActor(role, 'allies', role === 'archer' ? 72 : 105, role === 'archer' ? 3.2 : 3.8, role === 'archer' ? 15 : 2.4, role === 'archer' ? 13 : 18);
+    for (let index = 0; index < 22; index += 1) {
+      const role: Role = index % 10 === 0 ? 'brute' : index % 6 === 0 ? 'archer' : 'soldier';
+      const actor = this.createActor(
+        role,
+        'allies',
+        role === 'brute' ? 175 : role === 'archer' ? 76 : 108,
+        role === 'brute' ? 3.25 : role === 'archer' ? 3.25 : 3.82,
+        role === 'archer' ? 15 : role === 'brute' ? 2.8 : 2.4,
+        role === 'brute' ? 31 : role === 'archer' ? 14 : 19,
+      );
       actor.rig.root.position.set((index % 6 - 2.5) * 2.4 + (this.random() - 0.5), 0, 11 + Math.floor(index / 6) * 3.1);
+      actor.rig.setGroundHeight(0);
     }
 
-    for (let index = 0; index < 28; index += 1) {
-      const role: Role = index % 8 === 0 ? 'archer' : 'soldier';
-      const actor = this.createActor(role, 'enemies', role === 'archer' ? 66 : 92, role === 'archer' ? 3.1 : 3.65, role === 'archer' ? 16 : 2.3, role === 'archer' ? 11 : 16);
-      const inside = index >= 17;
-      actor.rig.root.position.set((index % 7 - 3) * 3.1 + (this.random() - 0.5) * 1.6, 0, inside ? -33 - Math.floor((index - 17) / 7) * 3.2 : -5 - Math.floor(index / 7) * 3.2);
+    for (let index = 0; index < 34; index += 1) {
+      const role: Role = index % 11 === 0 ? 'brute' : index % 7 === 0 ? 'archer' : 'soldier';
+      const actor = this.createActor(
+        role,
+        'enemies',
+        role === 'brute' ? 190 : role === 'archer' ? 70 : 96,
+        role === 'brute' ? 3.05 : role === 'archer' ? 3.12 : 3.66,
+        role === 'archer' ? 16 : role === 'brute' ? 2.9 : 2.3,
+        role === 'brute' ? 34 : role === 'archer' ? 12 : 17,
+      );
+      let x: number;
+      let z: number;
+      if (index < 15) {
+        x = (index % 7 - 3) * 3.1 + (this.random() - 0.5) * 1.2;
+        z = -5 - Math.floor(index / 7) * 3.3;
+      } else if (index < 25) {
+        x = (index % 5 - 2) * 3.2;
+        z = -49 - Math.floor((index - 15) / 5) * 4.2;
+      } else {
+        x = (index % 5 - 2) * 2.8;
+        z = -66.5 - Math.floor((index - 25) / 5) * 4;
+      }
+      const height = castleGroundHeight(x, z);
+      actor.rig.root.position.set(x, height, z);
+      actor.rig.setGroundHeight(height);
     }
 
-    this.boss = this.createActor('boss', 'enemies', 540, 3.45, 3.25, 34);
-    this.boss.rig.root.position.set(0, 0, -38);
+    this.boss = this.createActor('boss', 'enemies', 760, 3.55, 3.5, 42);
+    this.boss.rig.root.position.set(0, CASTLE_LIMITS.summitHeight, CASTLE_LIMITS.summitZ - 2);
+    this.boss.rig.setGroundHeight(CASTLE_LIMITS.summitHeight);
     this.boss.rig.root.visible = false;
     this.boss.dead = false;
     this.emitHud(true);
@@ -599,6 +842,7 @@ export class SiegeGame {
     this.updateObjectives(delta);
     this.updateActors(time, delta);
     this.updateProjectiles(delta);
+    this.updateExplosives(time);
     this.updateParticles(delta);
     this.updateCamera(delta);
     this.updateRespawn(delta);
@@ -640,10 +884,11 @@ export class SiegeGame {
       move.normalize();
       this.player.rig.root.position.addScaledVector(move, moveSpeed * delta);
       if (this.player.action !== 'attack' && this.player.action !== 'block') this.player.action = 'run';
-      this.player.rig.root.rotation.y = damp(this.player.rig.root.rotation.y, Math.atan2(move.x, move.z), 12, delta);
+      this.player.rig.root.rotation.y = dampAngle(this.player.rig.root.rotation.y, Math.atan2(move.x, move.z), 12, delta);
     } else if (this.player.action === 'run') this.player.action = 'idle';
     this.resolveWorldCollision(this.player.rig.root.position);
     this.resolveRamCollision(this.player.rig.root.position);
+    this.syncActorGround(this.player, delta);
     this.player.rig.setState(this.player.action, input.length(), delta);
   }
 
@@ -670,6 +915,15 @@ export class SiegeGame {
       }
       if (this.gateHealth <= 0) this.breakGate();
     } else if (this.phase === 2) {
+      const summitAllies = this.actors.filter((actor) => actor.team === 'allies' && !actor.dead && actor.rig.root.position.z < CASTLE_LIMITS.secondStairEndZ + 0.5).length;
+      if (this.player.rig.root.position.z < CASTLE_LIMITS.secondStairEndZ + 0.5 && summitAllies >= 3) {
+        this.phase = 3;
+        this.boss.rig.root.visible = true;
+        this.audio.horn();
+        this.events.onFeed('<b>Верхний двор взят.</b> Варгрим вышел к последней лестнице!');
+        this.events.onBattleEvent('phase', 3);
+      }
+    } else if (this.phase === 3) {
       if (this.boss.dead) {
         const near = distanceXZ(this.player.rig.root.position, this.banner.position) < 4.2;
         if (near && this.keys.has('KeyE')) this.captureProgress = Math.min(100, this.captureProgress + delta * 34);
@@ -678,7 +932,7 @@ export class SiegeGame {
       }
     }
     this.fireballTimer -= delta;
-    if (this.fireballTimer <= 0 && this.phase < 2) {
+    if (this.fireballTimer <= 0 && this.phase < 3) {
       this.fireballTimer = 5.5 + this.random() * 4;
       this.launchFireball();
     }
@@ -694,7 +948,7 @@ export class SiegeGame {
         actor.rig.update(time, delta);
         continue;
       }
-      if (actor === this.boss && this.phase < 2) continue;
+      if (actor === this.boss && this.phase < 3) continue;
       actor.decisionTimer -= delta;
       if (actor.decisionTimer <= 0) {
         actor.decisionTimer = 0.22 + this.random() * 0.26;
@@ -704,11 +958,11 @@ export class SiegeGame {
       let moving = false;
       if (target && !target.dead) {
         const distance = distanceXZ(actor.rig.root.position, target.rig.root.position);
-        const desiredRange = actor.role === 'archer' ? 11.5 : actor.attackRange * 0.78;
+        const desiredRange = actor.role === 'archer' ? 11.5 : actor.role === 'brute' ? 2.4 : actor.attackRange * 0.78;
         const direction = this.temp.subVectors(target.rig.root.position, actor.rig.root.position);
         direction.y = 0;
         if (direction.lengthSq() > 0.01) direction.normalize();
-        actor.rig.root.rotation.y = damp(actor.rig.root.rotation.y, Math.atan2(direction.x, direction.z), 9, delta);
+        actor.rig.root.rotation.y = dampAngle(actor.rig.root.rotation.y, Math.atan2(direction.x, direction.z), 9, delta);
         if (distance > desiredRange && actor.action !== 'attack') {
           const separation = this.computeSeparation(actor);
           const strafe = this.temp2.set(direction.z, 0, -direction.x).multiplyScalar(actor.role === 'archer' ? actor.strafe * 0.25 : 0);
@@ -719,7 +973,7 @@ export class SiegeGame {
           actor.action = 'attack';
           actor.actionTime = 0;
           actor.hitDone = false;
-          actor.cooldown = actor.role === 'boss' ? 0.86 : actor.role === 'archer' ? 1.9 + this.random() : 1.1 + this.random() * 0.45;
+          actor.cooldown = actor.role === 'boss' ? 0.86 : actor.role === 'brute' ? 1.35 : actor.role === 'archer' ? 1.9 + this.random() : 1.1 + this.random() * 0.45;
           if (actor.role === 'archer') this.audio.bow();
         }
       } else {
@@ -729,26 +983,27 @@ export class SiegeGame {
         if (direction.lengthSq() > 1) {
           direction.normalize();
           actor.rig.root.position.addScaledVector(direction, actor.speed * delta * 0.72);
-          actor.rig.root.rotation.y = damp(actor.rig.root.rotation.y, Math.atan2(direction.x, direction.z), 6, delta);
+          actor.rig.root.rotation.y = dampAngle(actor.rig.root.rotation.y, Math.atan2(direction.x, direction.z), 6, delta);
           actor.action = 'run';
           moving = true;
         } else actor.action = 'idle';
       }
 
       if (actor.action === 'attack') {
-        const impactMoment = actor.role === 'archer' ? 0.52 : 0.31;
+        const impactMoment = actor.role === 'archer' ? 0.52 : actor.role === 'brute' || actor.role === 'boss' ? 0.39 : 0.31;
         if (!actor.hitDone && actor.actionTime >= impactMoment) {
           actor.hitDone = true;
           if (actor.role === 'archer') this.fireArrow(actor);
           else this.actorMeleeHit(actor);
         }
-        const duration = actor.role === 'archer' ? 0.78 : 0.62;
+        const duration = actor.role === 'archer' ? 0.78 : actor.role === 'brute' || actor.role === 'boss' ? 0.76 : 0.62;
         if (actor.actionTime >= duration) actor.action = 'idle';
       } else if (!moving && this.random() < delta * 0.08 && actor.role !== 'boss') {
         actor.action = 'block';
       } else if (actor.action === 'block' && actor.actionTime > 0.7) actor.action = 'idle';
 
       this.resolveWorldCollision(actor.rig.root.position);
+      this.syncActorGround(actor, delta);
       actor.rig.setState(actor.action, moving ? 1 : 0, delta);
       actor.rig.update(time, delta);
     }
@@ -759,7 +1014,8 @@ export class SiegeGame {
     let best: Actor | undefined;
     let bestDistance = actor.role === 'archer' ? 22 : 11;
     for (const candidate of this.actors) {
-      if (candidate.dead || candidate.team === actor.team || candidate === this.boss && this.phase < 2) continue;
+      if (candidate.dead || candidate.team === actor.team || candidate === this.boss && this.phase < 3) continue;
+      if (Math.abs(candidate.rig.root.position.y - actor.rig.root.position.y) > 4.25) continue;
       const distance = distanceXZ(actor.rig.root.position, candidate.rig.root.position);
       if (distance < bestDistance) {
         bestDistance = distance;
@@ -770,12 +1026,19 @@ export class SiegeGame {
   }
 
   private getActorDestination(actor: Actor): THREE.Vector3 {
+    const index = Number(actor.id.split('-').at(-1));
+    const lane = (index % 5 - 2) * 1.8;
     if (actor.team === 'allies') {
-      if (this.phase < 2) return new THREE.Vector3((Number(actor.id.split('-').at(-1)) % 5 - 2) * 1.5, 0, this.ram.position.z + 4);
-      return new THREE.Vector3((Number(actor.id.split('-').at(-1)) % 7 - 3) * 2.2, 0, -37);
+      if (this.phase < 2) return new THREE.Vector3(lane, 0, this.ram.position.z + 4);
+      if (actor.rig.root.position.z > CASTLE_LIMITS.firstStairEndZ) return new THREE.Vector3(lane, 0, -49);
+      if (actor.rig.root.position.z > CASTLE_LIMITS.secondStairEndZ) return new THREE.Vector3(lane * 0.78, 0, -67);
+      return new THREE.Vector3(lane * 1.15, 0, -69.5);
     }
     if (this.phase < 2 && actor.rig.root.position.z < -28) return actor.rig.root.position.clone();
-    return new THREE.Vector3((Number(actor.id.split('-').at(-1)) % 7 - 3) * 2.1, 0, this.phase < 2 ? -8 : -32);
+    if (this.phase < 2) return new THREE.Vector3(lane * 1.2, 0, -8);
+    if (actor.rig.root.position.z < CASTLE_LIMITS.secondStairEndZ) return new THREE.Vector3(lane, 0, -68.5);
+    if (actor.rig.root.position.z < CASTLE_LIMITS.firstStairEndZ) return new THREE.Vector3(lane * 1.2, 0, -52);
+    return new THREE.Vector3(lane * 1.3, 0, -34);
   }
 
   private computeSeparation(actor: Actor): THREE.Vector3 {
@@ -809,7 +1072,7 @@ export class SiegeGame {
       const attacker = { x: this.player.rig.root.position.x, z: this.player.rig.root.position.z, rotation: this.yaw };
       let hit = false;
       for (const actor of this.actors) {
-        if (actor.team !== 'enemies' || actor.dead || actor === this.boss && this.phase < 2) continue;
+        if (actor.team !== 'enemies' || actor.dead || actor === this.boss && this.phase < 3) continue;
         if (pointInAttackArc(attacker, actor.rig.root.position, 3.25, Math.PI * 0.46)) {
           this.damageActor(actor, this.player.damage * (0.88 + this.random() * 0.32), this.player);
           hit = true;
@@ -817,6 +1080,11 @@ export class SiegeGame {
       }
       if (this.phase === 1 && distanceXZ(this.player.rig.root.position, this.gateGroup.position) < 5.2) {
         this.damageGate(3.5);
+        hit = true;
+      }
+      for (const explosive of this.explosives) {
+        if (!explosive.armed || !pointInAttackArc(attacker, explosive.group.position, 3.4, Math.PI * 0.52)) continue;
+        this.detonateExplosive(explosive, 'allies');
         hit = true;
       }
       if (hit) this.audio.hit(false);
@@ -829,6 +1097,7 @@ export class SiegeGame {
     const forward = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
     this.player.rig.root.position.addScaledVector(forward, 3.3);
     this.resolveWorldCollision(this.player.rig.root.position);
+    this.syncActorGround(this.player, 0.08);
     this.spawnImpact(this.player.rig.root.position.clone().add(new THREE.Vector3(0, 0.15, 0)), 0x8b7656, 7);
   }
 
@@ -884,7 +1153,13 @@ export class SiegeGame {
     this.player.health = this.player.maxHealth;
     this.player.stamina = 100;
     this.player.action = 'idle';
-    this.player.rig.root.position.copy(this.phase < 2 ? PLAYER_START : new THREE.Vector3(0, 0, -30));
+    const respawn = this.phase < 2
+      ? PLAYER_START
+      : this.phase === 2
+        ? new THREE.Vector3(0, 0, -31)
+        : new THREE.Vector3(0, CASTLE_LIMITS.summitHeight, CASTLE_LIMITS.secondStairEndZ - 1);
+    this.player.rig.root.position.copy(respawn);
+    this.player.rig.setGroundHeight(respawn.y);
   }
 
   private fireArrow(actor: Actor): void {
@@ -904,7 +1179,9 @@ export class SiegeGame {
 
   private launchFireball(): void {
     const target = this.player.rig.root.position.clone().add(new THREE.Vector3((this.random() - 0.5) * 9, 0, (this.random() - 0.5) * 9));
-    const origin = new THREE.Vector3((this.random() > 0.5 ? 1 : -1) * 23, 10.8, -26);
+    const origin = this.phase < 2
+      ? new THREE.Vector3((this.random() > 0.5 ? 1 : -1) * 23, 10.8, -26)
+      : new THREE.Vector3((this.random() > 0.5 ? 1 : -1) * 14, 18.5, -67);
     const velocity = target.sub(origin).multiplyScalar(0.33);
     velocity.y += 5.5;
     const fire = new THREE.Mesh(
@@ -924,6 +1201,13 @@ export class SiegeGame {
       projectile.mesh.position.addScaledVector(projectile.velocity, delta);
       if (!projectile.fire) projectile.mesh.quaternion.setFromUnitVectors(UP, projectile.velocity.clone().normalize());
       let remove = projectile.life <= 0;
+      for (const explosive of this.explosives) {
+        if (remove || !explosive.armed) continue;
+        if (projectile.mesh.position.distanceTo(explosive.group.position.clone().add(new THREE.Vector3(0, 0.65, 0))) < explosive.triggerRadius) {
+          this.detonateExplosive(explosive, projectile.team);
+          remove = true;
+        }
+      }
       for (const actor of this.actors) {
         if (remove || actor.dead || actor.team === projectile.team) continue;
         if (projectile.mesh.position.distanceTo(actor.rig.root.position.clone().add(new THREE.Vector3(0, 1, 0))) < (projectile.fire ? 1.25 : 0.65)) {
@@ -931,8 +1215,11 @@ export class SiegeGame {
           remove = true;
         }
       }
-      if (projectile.fire && projectile.mesh.position.y <= 0.35) {
-        this.explode(projectile.mesh.position);
+      if (projectile.fire && projectile.mesh.position.y <= castleGroundHeight(projectile.mesh.position.x, projectile.mesh.position.z) + 0.35) {
+        this.explode(projectile.mesh.position, 'enemies', 5, 46);
+        remove = true;
+      } else if (!projectile.fire && projectile.mesh.position.y <= castleGroundHeight(projectile.mesh.position.x, projectile.mesh.position.z) + 0.12) {
+        this.spawnImpact(projectile.mesh.position, 0xc9b28d, 2);
         remove = true;
       }
       if (remove) {
@@ -946,14 +1233,40 @@ export class SiegeGame {
     return this.actors.find((actor) => actor.team === team && !actor.dead) ?? this.player;
   }
 
-  private explode(position: THREE.Vector3): void {
+  private explode(position: THREE.Vector3, sourceTeam: Team | 'neutral', radius: number, damage: number): void {
     this.audio.explosion();
     this.cameraShake = Math.max(this.cameraShake, clamp(1 - position.distanceTo(this.player.rig.root.position) / 24, 0, 0.9));
     this.spawnImpact(position, 0xff6a19, 25);
     for (const actor of this.actors) {
-      if (actor.dead || actor.team === 'enemies') continue;
+      if (actor.dead || sourceTeam !== 'neutral' && actor.team === sourceTeam) continue;
       const distance = actor.rig.root.position.distanceTo(position);
-      if (distance < 5) this.damageActor(actor, (1 - distance / 5) * 46, this.findProjectileOwner('enemies'));
+      if (distance < radius) {
+        const attacker = sourceTeam === 'allies' ? this.player : this.findProjectileOwner('enemies');
+        this.damageActor(actor, (1 - distance / radius) * damage, attacker);
+      }
+    }
+  }
+
+  private updateExplosives(time: number): void {
+    for (const explosive of this.explosives) {
+      if (!explosive.armed) continue;
+      const fuse = explosive.group.getObjectByName('mine-fuse');
+      if (fuse) fuse.scale.setScalar(0.75 + Math.sin(time * 12 + explosive.group.id) * 0.22);
+      if (explosive.kind !== 'mine') continue;
+      const target = this.actors.find((actor) => !actor.dead && actor.team !== explosive.team && distanceXZ(actor.rig.root.position, explosive.group.position) < explosive.triggerRadius);
+      if (target) this.detonateExplosive(explosive, explosive.team);
+    }
+  }
+
+  private detonateExplosive(explosive: ExplosiveProp, sourceTeam: Team | 'neutral'): void {
+    if (!explosive.armed) return;
+    explosive.armed = false;
+    explosive.group.visible = false;
+    const origin = explosive.group.position.clone().add(new THREE.Vector3(0, explosive.kind === 'barrel' ? 0.7 : 0.18, 0));
+    this.explode(origin, sourceTeam, explosive.blastRadius, explosive.damage);
+    for (const other of this.explosives) {
+      if (!other.armed || other === explosive || distanceXZ(other.group.position, origin) > explosive.blastRadius * 0.82) continue;
+      window.setTimeout(() => this.detonateExplosive(other, sourceTeam), 90 + this.random() * 130);
     }
   }
 
@@ -992,25 +1305,18 @@ export class SiegeGame {
   private breakGate(): void {
     if (this.phase >= 2) return;
     this.phase = 2;
-    this.boss.rig.root.visible = true;
     this.audio.explosion();
     this.audio.horn();
     this.cameraShake = 1;
     this.spawnImpact(new THREE.Vector3(0, 3, -25.5), 0xcf8b4c, 38);
-    this.events.onFeed('<b>Врата разрушены!</b> Вперёд, во внутренний двор!');
+    this.events.onFeed('<b>Врата открыты!</b> Легион, на первую лестницу!');
     this.events.onBattleEvent('phase', 2);
   }
 
   private updateGateVisual(delta: number): void {
     const opened = smoothstep(25, 0, this.gateHealth);
-    this.gateLeft.rotation.y = damp(this.gateLeft.rotation.y, -opened * 1.35, 2.5, delta);
-    this.gateRight.rotation.y = damp(this.gateRight.rotation.y, opened * 1.35, 2.5, delta);
-    this.gateLeft.position.x = -2 - opened * 1.2;
-    this.gateRight.position.x = 2 + opened * 1.2;
-    if (this.phase >= 2) {
-      this.gateLeft.rotation.z = damp(this.gateLeft.rotation.z, -0.25, 1.3, delta);
-      this.gateRight.rotation.z = damp(this.gateRight.rotation.z, 0.25, 1.3, delta);
-    }
+    this.gateLeft.rotation.y = dampAngle(this.gateLeft.rotation.y, opened * 1.48, 3.2, delta);
+    this.gateRight.rotation.y = dampAngle(this.gateRight.rotation.y, -opened * 1.48, 3.2, delta);
     if (this.boss.dead) this.banner.rotation.z = damp(this.banner.rotation.z, 0, 1.4, delta);
   }
 
@@ -1030,7 +1336,7 @@ export class SiegeGame {
   private updateRemotePlayers(time: number, delta: number): void {
     for (const remote of this.remotes.values()) {
       remote.rig.root.position.lerp(remote.targetPosition, 1 - Math.exp(-12 * delta));
-      remote.rig.root.rotation.y = damp(remote.rig.root.rotation.y, remote.targetRotation, 12, delta);
+      remote.rig.root.rotation.y = dampAngle(remote.rig.root.rotation.y, remote.targetRotation, 12, delta);
       remote.rig.setState(remote.action, remote.action === 'run' ? 1 : 0, delta);
       remote.rig.update(time, delta);
     }
@@ -1038,7 +1344,7 @@ export class SiegeGame {
 
   private resolveWorldCollision(position: THREE.Vector3): void {
     position.x = clamp(position.x, -41.5, 41.5);
-    position.z = clamp(position.z, -46, 43);
+    position.z = clamp(position.z, -74, 43);
     const atWall = position.z < -24.3 && position.z > -29.8;
     const gatePassable = this.phase >= 2 && Math.abs(position.x) < 4.3;
     if (atWall && !gatePassable) {
@@ -1046,6 +1352,20 @@ export class SiegeGame {
       else position.z = -29.85;
     }
     if (position.z < -29 && Math.abs(position.x) > 25.2) position.x = Math.sign(position.x) * 25.2;
+    if (position.z <= CASTLE_LIMITS.firstStairStartZ && position.z >= CASTLE_LIMITS.firstStairEndZ) {
+      position.x = clamp(position.x, -6.8, 6.8);
+    } else if (position.z < CASTLE_LIMITS.firstStairEndZ && position.z > CASTLE_LIMITS.secondStairStartZ) {
+      position.x = clamp(position.x, -14.6, 14.6);
+    } else if (position.z <= CASTLE_LIMITS.secondStairStartZ && position.z >= CASTLE_LIMITS.secondStairEndZ) {
+      position.x = clamp(position.x, -5.4, 5.4);
+    } else if (position.z < CASTLE_LIMITS.secondStairEndZ) {
+      position.x = clamp(position.x, -11.5, 11.5);
+    }
+  }
+
+  private syncActorGround(actor: Actor, delta: number): void {
+    const targetHeight = castleGroundHeight(actor.rig.root.position.x, actor.rig.root.position.z);
+    actor.rig.setGroundHeight(damp(actor.rig.root.position.y, targetHeight, 18, delta));
   }
 
   private resolveRamCollision(position: THREE.Vector3): void {
@@ -1076,6 +1396,10 @@ export class SiegeGame {
       objective = 'Защитите таран и сокрушите ворота';
       progress = 100 - this.gateHealth;
     } else if (this.phase === 2) {
+      const summitAllies = this.actors.filter((actor) => actor.team === 'allies' && !actor.dead && actor.rig.root.position.z < -64).length;
+      objective = `Прорвитесь на верхний ярус вместе с легионом · ${summitAllies}/3`;
+      progress = clamp((-this.player.rig.root.position.z - 29) / 35 * 100, 0, 100);
+    } else if (this.phase === 3) {
       objective = this.boss.dead ? 'Удерживайте E у знамени' : 'Сразите лорда Варгрима';
       progress = this.boss.dead ? this.captureProgress : 100 - this.boss.health / this.boss.maxHealth * 100;
     }
@@ -1087,8 +1411,8 @@ export class SiegeGame {
       objective,
       progress,
       allies: this.actors.filter((actor) => actor.team === 'allies' && !actor.dead).length,
-      enemies: this.actors.filter((actor) => actor.team === 'enemies' && !actor.dead && (actor !== this.boss || this.phase >= 2)).length,
-      interaction: this.phase === 2 && this.boss.dead && distanceXZ(this.player.rig.root.position, this.banner.position) < 4.2,
+      enemies: this.actors.filter((actor) => actor.team === 'enemies' && !actor.dead && (actor !== this.boss || this.phase >= 3)).length,
+      interaction: this.phase === 3 && this.boss.dead && distanceXZ(this.player.rig.root.position, this.banner.position) < 4.2,
     });
   }
 
@@ -1140,22 +1464,72 @@ export class SiegeGame {
     canvas.height = 256;
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Canvas 2D is unavailable');
-    context.fillStyle = '#77746c';
+    context.fillStyle = '#282a29';
     context.fillRect(0, 0, 512, 256);
     const rowHeight = 32;
     for (let row = 0; row < 8; row += 1) {
       const offset = row % 2 ? -32 : 0;
       for (let column = offset; column < 512; column += 64) {
-        const shade = 87 + Math.floor(this.random() * 32);
-        context.fillStyle = `rgb(${shade},${shade - 2},${shade - 7})`;
+        const shade = 72 + Math.floor(this.random() * 34);
+        const gradient = context.createLinearGradient(column, row * rowHeight, column, (row + 1) * rowHeight);
+        gradient.addColorStop(0, `rgb(${shade + 18},${shade + 15},${shade + 8})`);
+        gradient.addColorStop(0.46, `rgb(${shade + 4},${shade + 2},${shade - 4})`);
+        gradient.addColorStop(1, `rgb(${shade - 11},${shade - 10},${shade - 14})`);
+        context.fillStyle = gradient;
         context.fillRect(column + 2, row * rowHeight + 2, 60, rowHeight - 4);
-        context.strokeStyle = 'rgba(28,28,27,.55)';
+        context.strokeStyle = 'rgba(18,19,18,.72)';
         context.strokeRect(column + 1, row * rowHeight + 1, 62, rowHeight - 2);
+        context.strokeStyle = 'rgba(222,214,187,.09)';
+        context.beginPath();
+        context.moveTo(column + 5, row * rowHeight + 5 + this.random() * 8);
+        context.lineTo(column + 17 + this.random() * 25, row * rowHeight + 4 + this.random() * 13);
+        context.stroke();
       }
     }
-    for (let index = 0; index < 900; index += 1) {
-      context.fillStyle = `rgba(255,255,255,${this.random() * 0.08})`;
-      context.fillRect(this.random() * 512, this.random() * 256, 1, 1);
+    for (let index = 0; index < 1400; index += 1) {
+      const bright = this.random() > 0.58;
+      context.fillStyle = bright
+        ? `rgba(226,218,190,${0.02 + this.random() * 0.11})`
+        : `rgba(8,12,10,${0.04 + this.random() * 0.16})`;
+      const size = 0.6 + this.random() * 1.8;
+      context.fillRect(this.random() * 512, this.random() * 256, size, size);
+    }
+    return new THREE.CanvasTexture(canvas);
+  }
+
+  private createWoodTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Canvas 2D is unavailable');
+    context.fillStyle = '#3b1e12';
+    context.fillRect(0, 0, 256, 256);
+    for (let plank = 0; plank < 8; plank += 1) {
+      const x = plank * 32;
+      const shade = 72 + Math.floor(this.random() * 28);
+      const gradient = context.createLinearGradient(x, 0, x + 32, 0);
+      gradient.addColorStop(0, `rgb(${shade - 18},${Math.floor(shade * 0.56)},${Math.floor(shade * 0.3)})`);
+      gradient.addColorStop(0.45, `rgb(${shade + 16},${Math.floor(shade * 0.68)},${Math.floor(shade * 0.38)})`);
+      gradient.addColorStop(1, `rgb(${shade - 12},${Math.floor(shade * 0.5)},${Math.floor(shade * 0.27)})`);
+      context.fillStyle = gradient;
+      context.fillRect(x + 2, 0, 29, 256);
+      context.fillStyle = 'rgba(18,8,4,.72)';
+      context.fillRect(x, 0, 2, 256);
+      for (let grain = 0; grain < 13; grain += 1) {
+        context.strokeStyle = `rgba(38,15,7,${0.08 + this.random() * 0.18})`;
+        context.beginPath();
+        const startY = this.random() * 256;
+        context.moveTo(x + 4 + this.random() * 20, startY);
+        context.bezierCurveTo(x + 26, startY + 18, x + 5, startY + 34, x + 25, startY + 58);
+        context.stroke();
+      }
+      for (let knot = 0; knot < 2; knot += 1) {
+        context.strokeStyle = 'rgba(29,10,4,.38)';
+        context.beginPath();
+        context.ellipse(x + 8 + this.random() * 16, this.random() * 256, 3 + this.random() * 3, 7 + this.random() * 7, 0, 0, Math.PI * 2);
+        context.stroke();
+      }
     }
     return new THREE.CanvasTexture(canvas);
   }
